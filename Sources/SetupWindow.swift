@@ -324,6 +324,10 @@ class SetupWindowController: NSWindowController, NSWindowDelegate {
         let code = codeField.stringValue.trimmingCharacters(in: .whitespaces)
 
         if !code.isEmpty {
+            // Ensure auth callback is wired before sending code
+            telegramClient?.onAuthStateChanged = { [weak self] state in
+                DispatchQueue.main.async { self?.handleAuthState(state) }
+            }
             telegramClient?.sendCode(code)
             loginButton.title = "Verifying..."
             loginButton.isEnabled = false
@@ -344,6 +348,11 @@ class SetupWindowController: NSWindowController, NSWindowDelegate {
                             self.loginStatus.stringValue = "Sending phone number..."
                             self.loginStatus.textColor = .secondaryLabelColor
                             // Restore normal callback
+                            self.telegramClient?.onAuthStateChanged = { [weak self] s in
+                                DispatchQueue.main.async { self?.handleAuthState(s) }
+                            }
+                        } else if state == .ready {
+                            // Already authenticated from previous session — no phone needed
                             self.telegramClient?.onAuthStateChanged = { [weak self] s in
                                 DispatchQueue.main.async { self?.handleAuthState(s) }
                             }

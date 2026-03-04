@@ -6,6 +6,7 @@ class SetupWindowController: NSWindowController, NSWindowDelegate {
     private let botTokenField = NSTextField()
     private let chatIdField = NSTextField()
     private let hotkeyField = HotkeyRecorderView(frame: .zero)
+    private let modePopup = NSPopUpButton()
 
     convenience init(existing: Config, onComplete: @escaping (Config) -> Void) {
         let window = NSWindow(
@@ -64,16 +65,24 @@ class SetupWindowController: NSWindowController, NSWindowDelegate {
         }
         view.addSubview(hotkeyField)
 
-        // Help text
-        let helpLabel = makeLabel("Click the hotkey field, then press your desired shortcut.", bold: false, size: 11)
-        helpLabel.textColor = .secondaryLabelColor
-        helpLabel.frame = NSRect(x: 20, y: 90, width: 380, height: 18)
-        view.addSubview(helpLabel)
+        // Recording mode
+        let modeLabel = makeLabel("Mode:")
+        modeLabel.frame = NSRect(x: 20, y: 90, width: 100, height: 20)
+        view.addSubview(modeLabel)
 
-        let helpLabel2 = makeLabel("Hold the hotkey to record audio, release to send.", bold: false, size: 11)
-        helpLabel2.textColor = .secondaryLabelColor
-        helpLabel2.frame = NSRect(x: 20, y: 72, width: 380, height: 18)
-        view.addSubview(helpLabel2)
+        modePopup.frame = NSRect(x: 120, y: 88, width: 280, height: 24)
+        modePopup.addItems(withTitles: [
+            "Hold to record (release sends)",
+            "Press to start, press any key to stop & send"
+        ])
+        modePopup.selectItem(at: existing.recordingMode == .pressToToggle ? 1 : 0)
+        view.addSubview(modePopup)
+
+        // Help text
+        let helpLabel = makeLabel("Click the hotkey button, then press your desired shortcut.", bold: false, size: 11)
+        helpLabel.textColor = .secondaryLabelColor
+        helpLabel.frame = NSRect(x: 20, y: 60, width: 380, height: 18)
+        view.addSubview(helpLabel)
 
         // Save button
         let saveButton = NSButton(title: "Save & Start", target: self, action: #selector(saveConfig))
@@ -105,12 +114,15 @@ class SetupWindowController: NSWindowController, NSWindowDelegate {
             return
         }
 
+        let mode: RecordingMode = modePopup.indexOfSelectedItem == 1 ? .pressToToggle : .holdToRecord
+
         let config = Config(
             botToken: token,
             chatId: chatId,
             hotkeyKeyCode: recorded.keyCode,
             hotkeyModifiers: recorded.modifiers,
-            hotkeyDisplay: recorded.displayString
+            hotkeyDisplay: recorded.displayString,
+            recordingMode: mode
         )
         config.save()
         onComplete?(config)

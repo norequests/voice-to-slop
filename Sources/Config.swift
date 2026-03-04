@@ -1,11 +1,17 @@
 import Foundation
 
+enum RecordingMode: String, Codable {
+    case holdToRecord = "hold"     // hold hotkey, release to send
+    case pressToToggle = "toggle"  // press to start, press any key to stop & send
+}
+
 struct Config: Codable {
     var botToken: String
     var chatId: String
     var hotkeyKeyCode: UInt16
     var hotkeyModifiers: UInt
     var hotkeyDisplay: String
+    var recordingMode: RecordingMode
 
     static let configURL: URL = {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -19,7 +25,8 @@ struct Config: Codable {
         chatId: "",
         hotkeyKeyCode: 0x60, // F5
         hotkeyModifiers: 0,
-        hotkeyDisplay: "F5"
+        hotkeyDisplay: "F5",
+        recordingMode: .holdToRecord
     )
 
     static func load() -> Config {

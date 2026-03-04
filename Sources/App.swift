@@ -87,40 +87,62 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let targetKeyCode = config.hotkeyKeyCode
         let targetModifiers = NSEvent.ModifierFlags(rawValue: config.hotkeyModifiers)
             .intersection(.deviceIndependentFlagsMask)
+        let mode = config.recordingMode
 
-        // Global key down
-        NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard event.keyCode == targetKeyCode, !event.isARepeat else { return }
+        func hotkeyMatches(_ event: NSEvent) -> Bool {
+            guard event.keyCode == targetKeyCode else { return false }
             let eventMods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            guard eventMods == targetModifiers else { return }
-            self?.startRecording()
+            return eventMods == targetModifiers
         }
 
-        // Global key up
-        NSEvent.addGlobalMonitorForEvents(matching: .keyUp) { [weak self] event in
-            guard event.keyCode == targetKeyCode else { return }
-            self?.stopAndSend()
-        }
-
-        // Local key down
-        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            if event.keyCode == targetKeyCode, !event.isARepeat {
-                let eventMods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-                if eventMods == targetModifiers {
+        switch mode {
+        case .holdToRecord:
+            // Hold mode: key down starts, key up stops
+            NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard hotkeyMatches(event), !event.isARepeat else { return }
+                self?.startRecording()
+            }
+            NSEvent.addGlobalMonitorForEvents(matching: .keyUp) { [weak self] event in
+                guard event.keyCode == targetKeyCode else { return }
+                self?.stopAndSend()
+            }
+            NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                if hotkeyMatches(event), !event.isARepeat {
                     self?.startRecording()
                     return nil
                 }
+                return event
             }
-            return event
-        }
+            NSEvent.addLocalMonitorForEvents(matching: .keyUp) { [weak self] event in
+                if event.keyCode == targetKeyCode {
+                    self?.stopAndSend()
+                    return nil
+                }
+                return event
+            }
 
-        // Local key up
-        NSEvent.addLocalMonitorForEvents(matching: .keyUp) { [weak self] event in
-            if event.keyCode == targetKeyCode {
-                self?.stopAndSend()
-                return nil
+        case .pressToToggle:
+            // Toggle mode: hotkey starts recording, ANY key stops & sends
+            NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self = self else { return }
+                if self.isRecording {
+                    // Any key stops recording
+                    self.stopAndSend()
+                } else if hotkeyMatches(event), !event.isARepeat {
+                    self.startRecording()
+                }
             }
-            return event
+            NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self = self else { return event }
+                if self.isRecording {
+                    self.stopAndSend()
+                    return nil
+                } else if hotkeyMatches(event), !event.isARepeat {
+                    self.startRecording()
+                    return nil
+                }
+                return event
+            }
         }
     }
 

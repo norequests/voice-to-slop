@@ -42,6 +42,11 @@ private let _td_receive: TdReceive? = {
     return unsafeBitCast(sym, to: TdReceive.self)
 }()
 
+private let _td_execute: TdExecute? = {
+    guard let h = tdlibHandle, let sym = dlsym(h, "td_execute") else { return nil }
+    return unsafeBitCast(sym, to: TdExecute.self)
+}()
+
 /// Wraps TDLib JSON client for sending messages as the authenticated user.
 /// Loaded dynamically — if TDLib isn't available, isAvailable returns false.
 class TelegramClient {
@@ -82,24 +87,21 @@ class TelegramClient {
             return
         }
         guard apiId > 0, !apiHash.isEmpty else {
-            log("❌ TDLib: invalid API credentials")
+            log("❌ TDLib: invalid API credentials (apiId=\(apiId))")
             return
         }
 
+        // Set log verbosity to minimum to prevent TDLib internal crashes on logging
+        if let execFn = _td_execute {
+            let logReq = "{\"@type\":\"setLogVerbosityLevel\",\"new_verbosity_level\":1}"
+            logReq.withCString { _ = execFn($0) }
+        }
+
         running = true
+        log("🔑 TDLib starting — apiId=\(apiId), dataDir=\(tdlibDataDir())")
 
-        send([
-            "@type": "setTdlibParameters",
-            "database_directory": tdlibDataDir(),
-            "use_message_database": true,
-            "use_secret_chats": false,
-            "api_id": apiId,
-            "api_hash": apiHash,
-            "system_language_code": "en",
-            "device_model": "macOS",
-            "application_version": "1.0.0",
-        ])
-
+        // Don't send setTdlibParameters eagerly — let the receive loop handle
+        // authorizationStateWaitTdlibParameters first
         queue.async { [weak self] in
             self?.receiveLoop()
         }
@@ -174,6 +176,19 @@ class TelegramClient {
                   let stateType = authState["@type"] as? String else { return }
 
             switch stateType {
+            case "authorizationStateWaitTdlibParameters":
+                log("📋 TDLib requesting parameters...")
+                send([
+                    "@type": "setTdlibParameters",
+                    "database_directory": tdlibDataDir(),
+                    "use_message_database": true,
+                    "use_secret_chats": false,
+                    "api_id": apiId,
+                    "api_hash": apiHash,
+                    "system_language_code": "en",
+                    "device_model": "macOS",
+                    "application_version": "1.0.0",
+                ])
             case "authorizationStateWaitPhoneNumber":
                 updateAuthState(.waitingForPhone)
             case "authorizationStateWaitCode":
@@ -186,6 +201,7 @@ class TelegramClient {
             case "authorizationStateClosed":
                 updateAuthState(.closed)
             default:
+                log("📋 TDLib auth state: \(stateType)")
                 break
             }
 

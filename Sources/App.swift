@@ -52,7 +52,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func showSetup() {
         NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringAllOtherApps: true)
+        NSApp.activate(ignoringOtherApps: true)
 
         setupWindow = SetupWindowController(existing: config) { [weak self] newConfig in
             self?.config = newConfig
@@ -217,8 +217,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 // ─── Main ────────────────────────────────────────────────────────────────────
-let app = NSApplication.shared
-let delegate = AppDelegate()
-app.delegate = delegate
-app.setActivationPolicy(.accessory)
-app.run()
+@main
+enum Main {
+    static func main() {
+        let app = NSApplication.shared
+        let delegate = AppDelegate()
+        app.delegate = delegate
+        app.setActivationPolicy(.accessory)
+        app.run()
+    }
+}

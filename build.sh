@@ -21,10 +21,13 @@ mkdir -p "$APP/Contents/Resources/lib"
 cp .build/release/TelegramVoiceHotkey "$APP/Contents/MacOS/"
 
 # Bundle TDLib
-cp tdlib-local/lib/libtdjson.dylib "$APP/Contents/Resources/lib/"
+# Copy all dylib files (resolving symlinks) so versioned names are present
+for f in tdlib-local/lib/libtdjson*.dylib; do
+    cp -L "$f" "$APP/Contents/Resources/lib/"
+done
 # Fix rpath in the binary
 install_name_tool -add_rpath "@executable_path/../Resources/lib" "$APP/Contents/MacOS/TelegramVoiceHotkey" 2>/dev/null || true
-echo "📦 Bundled TDLib"
+echo "📦 Bundled TDLib ($(ls "$APP/Contents/Resources/lib/" | grep tdjson | tr '\n' ' '))"
 
 # Bundle ffmpeg for OGG/Opus conversion
 SYS_FFMPEG=$(which ffmpeg 2>/dev/null || echo "")

@@ -44,12 +44,17 @@ class WhisperTranscriber {
         }
 
         // Find model: bundled first, then common locations
-        let bundledModel = Bundle.main.resourceURL?.appendingPathComponent("models/ggml-base.en.bin").path
-        let modelCandidates = [
-            bundledModel,
-            "\(NSHomeDirectory())/Library/Application Support/TelegramVoiceHotkey/models/ggml-base.en.bin",
-            "/opt/homebrew/share/whisper-cpp/models/ggml-base.en.bin",
+        // Prefer larger models for better accuracy (especially in noisy environments)
+        let modelNames = ["ggml-small.en.bin", "ggml-base.en.bin"]
+        let searchDirs = [
+            Bundle.main.resourceURL?.appendingPathComponent("models").path,
+            "\(NSHomeDirectory())/Library/Application Support/TelegramVoiceHotkey/models",
+            "/opt/homebrew/share/whisper-cpp/models",
         ].compactMap { $0 }
+
+        let modelCandidates = modelNames.flatMap { name in
+            searchDirs.map { dir in "\(dir)/\(name)" }
+        }
         let modelPath = modelCandidates.first { FileManager.default.fileExists(atPath: $0) }
 
         guard let model = modelPath else {

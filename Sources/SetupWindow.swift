@@ -234,56 +234,60 @@ class SetupWindowController: NSWindowController, NSWindowDelegate {
     }
 
     @objc func startReauth() {
-        loginStatus.stringValue = "Closing existing session..."
+        loginStatus.stringValue = "Logging out..."
         loginStatus.textColor = .secondaryLabelColor
         loginButton.isEnabled = false
 
-        let finishReauth = { [weak self] in
+        existingConfig.userLoggedIn = false
+        existingConfig.save()
+
+        // Use logOut — TDLib will go closed → recreate → waitingForPhoneNumber
+        let client = telegramClient ?? (NSApp.delegate as? AppDelegate)?.telegramClient
+        client?.onAuthStateChanged = { [weak self] state in
             guard let self = self else { return }
-            let tdlibDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-                .appendingPathComponent("TelegramVoiceHotkey/tdlib")
-            try? FileManager.default.removeItem(at: tdlibDir)
-
-            self.existingConfig.userLoggedIn = false
-            self.existingConfig.save()
-
-            self.loginStatus.stringValue = "Enter phone to re-authenticate"
-            self.loginStatus.textColor = .secondaryLabelColor
-            self.loginButton.title = "Send Code"
-            self.loginButton.action = #selector(self.handleLogin)
-            self.loginButton.isEnabled = true
-
-            // Add phone/code fields below login status
-            let y = self.loginRowY - 30
-            if self.phoneField.superview == nil {
-                self.phoneField.frame = NSRect(x: 115, y: y, width: 200, height: 24)
-                self.phoneField.placeholderString = "+1234567890"
-                self.phoneField.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-                self.window?.contentView?.addSubview(self.phoneField)
+            DispatchQueue.main.async {
+                self.handleAuthState(state)
+                if state == .waitingForPhone {
+                    self.showReauthFields()
+                }
             }
-            self.phoneField.frame = NSRect(x: 115, y: y, width: 200, height: 24)
-            self.phoneField.isHidden = false
+        }
+        client?.logOut()
 
-            if self.codeField.superview == nil {
-                self.codeField.frame = NSRect(x: 115, y: y - 30, width: 200, height: 24)
-                self.codeField.placeholderString = "12345"
-                self.codeField.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-                self.window?.contentView?.addSubview(self.codeField)
+        // Fallback: if logOut doesn't trigger state change in 5s, show fields anyway
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { [weak self] in
+            guard let self = self else { return }
+            if self.loginButton.title == "Logging out..." {
+                self.showReauthFields()
             }
-            self.codeField.frame = NSRect(x: 115, y: y - 30, width: 200, height: 24)
-            self.codeField.isHidden = false
-
-            self.telegramClient = nil
         }
+    }
 
-        // Close existing TDLib client first to release database lock
-        if let client = telegramClient {
-            client.close { finishReauth() }
-        } else if let appDelegate = NSApp.delegate as? AppDelegate, let client = appDelegate.telegramClient {
-            client.close { finishReauth() }
-        } else {
-            finishReauth()
+    private func showReauthFields() {
+        loginStatus.stringValue = "Enter phone to re-authenticate"
+        loginStatus.textColor = .secondaryLabelColor
+        loginButton.title = "Send Code"
+        loginButton.action = #selector(handleLogin)
+        loginButton.isEnabled = true
+
+        let y = loginRowY - 30
+        if phoneField.superview == nil {
+            phoneField.frame = NSRect(x: 115, y: y, width: 200, height: 24)
+            phoneField.placeholderString = "+1234567890"
+            phoneField.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+            window?.contentView?.addSubview(phoneField)
         }
+        phoneField.frame = NSRect(x: 115, y: y, width: 200, height: 24)
+        phoneField.isHidden = false
+
+        if codeField.superview == nil {
+            codeField.frame = NSRect(x: 115, y: y - 30, width: 200, height: 24)
+            codeField.placeholderString = "12345"
+            codeField.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+            window?.contentView?.addSubview(codeField)
+        }
+        codeField.frame = NSRect(x: 115, y: y - 30, width: 200, height: 24)
+        codeField.isHidden = false
     }
 
     @objc func handleLogin() {
@@ -304,12 +308,20 @@ class SetupWindowController: NSWindowController, NSWindowDelegate {
             return
         }
 
-        let isNewClient = (telegramClient == nil)
-        if isNewClient {
-            telegramClient = TelegramClient(apiId: apiId, apiHash: apiHash)
-            telegramClient?.start()
+        // Ensure we have a client (reuse AppDelegate's if possible)
+        if telegramClient == nil {
+            if let appClient = (NSApp.delegate as? AppDelegate)?.telegramClient {
+                telegramClient = appClient
+            } else {
+                let client = TelegramClient(apiId: apiId, apiHash: apiHash)
+                telegramClient = client
+                client.start()
+                // Also set on AppDelegate so it's shared
+                (NSApp.delegate as? AppDelegate)?.telegramClient = client
+            }
         }
-        // Always wire up callbacks (even on existing client)
+
+        // Wire callbacks
         telegramClient?.onAuthStateChanged = { [weak self] state in
             DispatchQueue.main.async { self?.handleAuthState(state) }
         }
@@ -324,35 +336,37 @@ class SetupWindowController: NSWindowController, NSWindowDelegate {
         let code = codeField.stringValue.trimmingCharacters(in: .whitespaces)
 
         if !code.isEmpty {
-            // Ensure auth callback is wired before sending code
-            telegramClient?.onAuthStateChanged = { [weak self] state in
-                DispatchQueue.main.async { self?.handleAuthState(state) }
-            }
             telegramClient?.sendCode(code)
             loginButton.title = "Verifying..."
             loginButton.isEnabled = false
         } else if !phone.isEmpty {
-            if isNewClient {
-                // TDLib hasn't reached waitingForPhoneNumber yet — queue it
+            // If client is still initializing, queue the phone send
+            if telegramClient?.authState == .waitingForPhone {
+                telegramClient?.sendPhoneNumber(phone)
+                loginButton.title = "Verify Code"
+                loginStatus.stringValue = "📱 Code sent to Telegram"
+                loginStatus.textColor = .systemOrange
+            } else {
+                // TDLib not ready yet — wait for waitingForPhone
                 loginButton.title = "Connecting..."
                 loginButton.isEnabled = false
-                loginStatus.stringValue = "Initializing TDLib..."
+                loginStatus.stringValue = "Waiting for TDLib..."
                 loginStatus.textColor = .secondaryLabelColor
+
                 telegramClient?.onAuthStateChanged = { [weak self] state in
                     DispatchQueue.main.async {
                         guard let self = self else { return }
                         if state == .waitingForPhone {
-                            // NOW send the phone number
                             self.telegramClient?.sendPhoneNumber(phone)
                             self.loginButton.title = "Verify Code"
-                            self.loginStatus.stringValue = "Sending phone number..."
-                            self.loginStatus.textColor = .secondaryLabelColor
+                            self.loginButton.isEnabled = true
+                            self.loginStatus.stringValue = "📱 Code sent to Telegram"
+                            self.loginStatus.textColor = .systemOrange
                             // Restore normal callback
                             self.telegramClient?.onAuthStateChanged = { [weak self] s in
                                 DispatchQueue.main.async { self?.handleAuthState(s) }
                             }
                         } else if state == .ready {
-                            // Already authenticated from previous session — no phone needed
                             self.telegramClient?.onAuthStateChanged = { [weak self] s in
                                 DispatchQueue.main.async { self?.handleAuthState(s) }
                             }
@@ -360,11 +374,6 @@ class SetupWindowController: NSWindowController, NSWindowDelegate {
                         self.handleAuthState(state)
                     }
                 }
-            } else {
-                telegramClient?.sendPhoneNumber(phone)
-                loginButton.title = "Verify Code"
-                loginStatus.stringValue = "📱 Code sent to Telegram"
-                loginStatus.textColor = .systemOrange
             }
         } else {
             showAlert("Enter your phone number")

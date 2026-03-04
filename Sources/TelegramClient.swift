@@ -1,19 +1,16 @@
 import Foundation
 
-// Dynamically load TDLib so the app works without it (Bot API mode)
+// ─── TDLib Dynamic Loading ──────────────────────────────────────────────────
+// Load TDLib at runtime so the app can still compile/run without it.
+
 private let tdlibHandle: UnsafeMutableRawPointer? = {
-    // Look in app bundle first, then system
-    let bundled = Bundle.main.resourceURL?.appendingPathComponent("lib/libtdjson.dylib").path
-    if let path = bundled, FileManager.default.fileExists(atPath: path) {
-        return dlopen(path, RTLD_NOW)
-    }
-    // Try versioned name
-    let bundledVersioned = Bundle.main.resourceURL?.appendingPathComponent("lib/libtdjson.1.8.62.dylib").path
-    if let path = bundledVersioned, FileManager.default.fileExists(atPath: path) {
-        return dlopen(path, RTLD_NOW)
-    }
-    // System paths
-    for path in ["/opt/homebrew/lib/libtdjson.dylib", "/usr/local/lib/libtdjson.dylib"] {
+    let candidates = [
+        Bundle.main.resourceURL?.appendingPathComponent("lib/libtdjson.dylib").path,
+        Bundle.main.resourceURL?.appendingPathComponent("lib/libtdjson.1.8.62.dylib").path,
+        "/opt/homebrew/lib/libtdjson.dylib",
+        "/usr/local/lib/libtdjson.dylib",
+    ].compactMap { $0 }
+    for path in candidates {
         if FileManager.default.fileExists(atPath: path) {
             return dlopen(path, RTLD_NOW)
         }
@@ -21,418 +18,317 @@ private let tdlibHandle: UnsafeMutableRawPointer? = {
     return nil
 }()
 
-// Function pointers
 private typealias TdCreateClientId = @convention(c) () -> Int32
 private typealias TdSend = @convention(c) (Int32, UnsafePointer<CChar>) -> Void
 private typealias TdReceive = @convention(c) (Double) -> UnsafePointer<CChar>?
 private typealias TdExecute = @convention(c) (UnsafePointer<CChar>) -> UnsafePointer<CChar>?
 
-private let _td_create_client_id: TdCreateClientId? = {
-    guard let h = tdlibHandle, let sym = dlsym(h, "td_create_client_id") else { return nil }
-    return unsafeBitCast(sym, to: TdCreateClientId.self)
+private let _td_create: TdCreateClientId? = {
+    guard let h = tdlibHandle, let s = dlsym(h, "td_create_client_id") else { return nil }
+    return unsafeBitCast(s, to: TdCreateClientId.self)
 }()
-
 private let _td_send: TdSend? = {
-    guard let h = tdlibHandle, let sym = dlsym(h, "td_send") else { return nil }
-    return unsafeBitCast(sym, to: TdSend.self)
+    guard let h = tdlibHandle, let s = dlsym(h, "td_send") else { return nil }
+    return unsafeBitCast(s, to: TdSend.self)
 }()
-
 private let _td_receive: TdReceive? = {
-    guard let h = tdlibHandle, let sym = dlsym(h, "td_receive") else { return nil }
-    return unsafeBitCast(sym, to: TdReceive.self)
+    guard let h = tdlibHandle, let s = dlsym(h, "td_receive") else { return nil }
+    return unsafeBitCast(s, to: TdReceive.self)
 }()
-
 private let _td_execute: TdExecute? = {
-    guard let h = tdlibHandle, let sym = dlsym(h, "td_execute") else { return nil }
-    return unsafeBitCast(sym, to: TdExecute.self)
+    guard let h = tdlibHandle, let s = dlsym(h, "td_execute") else { return nil }
+    return unsafeBitCast(s, to: TdExecute.self)
 }()
 
-/// Wraps TDLib JSON client for sending messages as the authenticated user.
-/// Loaded dynamically — if TDLib isn't available, isAvailable returns false.
-class TelegramClient {
-    private var clientId: Int32 = -1
-    private var running = false
-    /// Shared serial queue — TDLib requires td_receive be called from one thread only
-    private static let sharedQueue = DispatchQueue(label: "tdlib.receive", qos: .background)
-    private static var receiveLoopRunning = false
+// ─── JSON Helpers ───────────────────────────────────────────────────────────
+// JSONSerialization wraps all integers as NSNumber. Direct `as? Int32` fails.
 
-    enum AuthState {
+private func jsonInt32(_ val: Any?) -> Int32? {
+    if let n = val as? NSNumber { return n.int32Value }
+    return nil
+}
+private func jsonInt64(_ val: Any?) -> Int64? {
+    if let n = val as? NSNumber { return n.int64Value }
+    return nil
+}
+private func jsonString(_ val: Any?) -> String? {
+    return val as? String
+}
+
+// ─── TelegramClient ─────────────────────────────────────────────────────────
+
+/// Thread-safe TDLib wrapper. Designed for ONE client per app lifetime.
+/// Uses a single background receive loop and dispatches all state to main.
+class TelegramClient {
+
+    // MARK: - Public API
+
+    enum AuthState: String, CustomStringConvertible {
+        case initializing
         case waitingForPhone
         case waitingForCode
         case waitingForPassword
         case ready
+        case loggingOut
         case closed
+        var description: String { rawValue }
     }
 
-    var authState: AuthState = .waitingForPhone
+    /// Current auth state (main-thread only)
+    private(set) var authState: AuthState = .initializing
+
+    /// Callbacks (always called on main thread)
     var onAuthStateChanged: ((AuthState) -> Void)?
     var onError: ((String) -> Void)?
 
-    private let apiId: Int
-    private let apiHash: String
+    var isLoggedIn: Bool { authState == .ready }
 
     static var isAvailable: Bool {
-        return tdlibHandle != nil && _td_create_client_id != nil
+        tdlibHandle != nil && _td_create != nil && _td_send != nil && _td_receive != nil
     }
 
-    /// Set up TDLib logging ONCE before any client is created
-    private static var loggingConfigured = false
-    private static func configureLogging() {
-        guard !loggingConfigured, let execFn = _td_execute else { return }
-        loggingConfigured = true
+    // MARK: - Private State
 
-        // Write TDLib internal logs to file for debugging
-        let logDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("TelegramVoiceHotkey")
-        try? FileManager.default.createDirectory(at: logDir, withIntermediateDirectories: true)
-        let tdLogPath = logDir.appendingPathComponent("tdlib.log").path
+    private let apiId: Int
+    private let apiHash: String
+    private var clientId: Int32 = -1
 
-        let logFileReq = "{\"@type\":\"setLogStream\",\"log_stream\":{\"@type\":\"logStreamFile\",\"path\":\"\(tdLogPath)\",\"max_file_size\":10485760,\"redirect_stderr\":false}}"
-        logFileReq.withCString { _ = execFn($0) }
+    /// Thread-safe pending callbacks: extra-string → handler
+    private let callbackLock = NSLock()
+    private var pendingCallbacks: [String: ([String: Any]) -> Void] = [:]
 
-        let verbReq = "{\"@type\":\"setLogVerbosityLevel\",\"new_verbosity_level\":1}"
-        verbReq.withCString { _ = execFn($0) }
+    /// One receive loop for the whole process
+    private static let receiveQueue = DispatchQueue(label: "tdlib.receive", qos: .background)
+    private static var receiveLoopRunning = false
+    private static let registryLock = NSLock()
+    private static var clients: [Int32: TelegramClient] = [:]
 
-        log("📋 TDLib logs → \(tdLogPath)")
-    }
+    // MARK: - Lifecycle
 
     init(apiId: Int, apiHash: String) {
         self.apiId = apiId
         self.apiHash = apiHash
-        TelegramClient.configureLogging()
-        if let create = _td_create_client_id {
-            self.clientId = create()
-            log("📋 TDLib client created (id=\(self.clientId))")
-        }
     }
 
+    /// Create the TDLib client and start the receive loop. Call once.
     func start() {
-        guard TelegramClient.isAvailable, clientId >= 0 else {
-            log("❌ TDLib not available")
+        guard TelegramClient.isAvailable else {
+            log("❌ TDLib not available — dylib not found")
             return
         }
         guard apiId > 0, !apiHash.isEmpty else {
-            log("❌ TDLib: invalid API credentials (apiId=\(apiId))")
+            log("❌ TDLib: invalid credentials (apiId=\(apiId))")
             return
         }
 
-        running = true
-        registerClient()
-        log("🔑 TDLib starting — clientId=\(clientId), apiId=\(apiId), dataDir=\(tdlibDataDir())")
+        // Configure logging once
+        TelegramClient.configureLogging()
 
-        // Start shared receive loop if not already running
+        // Create client
+        guard let createFn = _td_create else { return }
+        clientId = createFn()
+        log("📋 TDLib client created (id=\(clientId))")
+
+        // Register in global registry
+        TelegramClient.registryLock.lock()
+        TelegramClient.clients[clientId] = self
+        TelegramClient.registryLock.unlock()
+        log("📋 Client \(clientId) registered")
+
+        // Start the shared receive loop (if not already running)
         if !TelegramClient.receiveLoopRunning {
             TelegramClient.receiveLoopRunning = true
-            TelegramClient.sharedQueue.async {
-                TelegramClient.globalReceiveLoop()
+            TelegramClient.receiveQueue.async {
+                TelegramClient.receiveLoop()
             }
+            log("🔄 Receive loop started")
         }
+
+        log("🔑 TDLib starting — clientId=\(clientId), apiId=\(apiId)")
     }
 
-    func stop() {
-        running = false
-        send(["@type": "close"])
+    /// Log out (keeps the client alive for re-auth — no close/destroy needed)
+    func logOut() {
+        setAuthState(.loggingOut)
+        tdSend(["@type": "logOut"])
+        log("🔒 TDLib: logging out...")
     }
+
+    // MARK: - Auth Commands
 
     func sendPhoneNumber(_ phone: String) {
-        send(["@type": "setAuthenticationPhoneNumber", "phone_number": phone])
+        tdSend(["@type": "setAuthenticationPhoneNumber", "phone_number": phone])
     }
 
     func sendCode(_ code: String) {
-        send(["@type": "checkAuthenticationCode", "code": code])
+        tdSend(["@type": "checkAuthenticationCode", "code": code])
     }
 
     func sendPassword(_ password: String) {
-        send(["@type": "checkAuthenticationPassword", "password": password])
+        tdSend(["@type": "checkAuthenticationPassword", "password": password])
     }
 
+    // MARK: - Send Messages
+
     func sendVoiceNote(chatId: Int64, filePath: String, duration: Int, completion: @escaping (Bool) -> Void) {
-        // TDLib needs us to open/create the private chat first
-        let chatExtra = "create_chat_\(chatId)"
-        let sendExtra = UUID().uuidString
-
-        // Register a one-shot handler for the chat creation response
-        pendingCallbacks[chatExtra] = { [weak self] response in
-            guard let self = self else { return }
-            let type = response["@type"] as? String ?? ""
-
-            if type == "error" {
-                let msg = response["message"] as? String ?? "unknown"
-                log("❌ createPrivateChat failed: \(msg) — trying direct send")
+        ensureChat(userId: chatId) { [weak self] tdChatId in
+            guard let self = self, let tdChatId = tdChatId else {
+                DispatchQueue.main.async { completion(false) }
+                return
             }
-
-            // Get the actual chat_id (might differ from user_id)
-            var tdChatId = chatId
-            if type == "chat", let cid = response["id"] as? Int64 {
-                tdChatId = cid
-            } else if type == "chat", let cid = response["id"] as? NSNumber {
-                tdChatId = cid.int64Value
+            let extra = UUID().uuidString
+            self.setCallback(extra: extra) { response in
+                let ok = jsonString(response["@type"]) == "message"
+                if !ok { log("❌ sendVoiceNote failed: \(jsonString(response["@type"]) ?? "?")") }
+                DispatchQueue.main.async { completion(ok) }
             }
-
-            self.send([
+            self.tdSend([
                 "@type": "sendMessage",
-                "@extra": sendExtra,
+                "@extra": extra,
                 "chat_id": tdChatId,
                 "input_message_content": [
                     "@type": "inputMessageVoiceNote",
-                    "voice_note": [
-                        "@type": "inputFileLocal",
-                        "path": filePath,
-                    ],
+                    "voice_note": ["@type": "inputFileLocal", "path": filePath],
                     "duration": duration,
                 ],
             ])
         }
-
-        pendingCallbacks[sendExtra] = { response in
-            let type = response["@type"] as? String ?? ""
-            let ok = type == "message"
-            DispatchQueue.main.async { completion(ok) }
-        }
-
-        send([
-            "@type": "createPrivateChat",
-            "@extra": chatExtra,
-            "user_id": chatId,
-            "force": true,
-        ])
     }
 
-    /// Send a photo with an optional text caption
     func sendPhoto(chatId: Int64, photoPath: String, caption: String?, completion: @escaping (Bool) -> Void) {
-        let chatExtra = "create_chat_photo_\(chatId)"
-        let sendExtra = UUID().uuidString
-
-        pendingCallbacks[chatExtra] = { [weak self] response in
-            guard let self = self else { return }
-            let type = response["@type"] as? String ?? ""
-            if type == "error" {
-                let msg = response["message"] as? String ?? "unknown"
-                log("❌ createPrivateChat for photo failed: \(msg) — trying direct send")
+        ensureChat(userId: chatId) { [weak self] tdChatId in
+            guard let self = self, let tdChatId = tdChatId else {
+                DispatchQueue.main.async { completion(false) }
+                return
             }
-
-            var tdChatId = chatId
-            if type == "chat", let cid = response["id"] as? Int64 {
-                tdChatId = cid
-            } else if type == "chat", let cid = response["id"] as? NSNumber {
-                tdChatId = cid.int64Value
+            let extra = UUID().uuidString
+            self.setCallback(extra: extra) { response in
+                let ok = jsonString(response["@type"]) == "message"
+                if !ok { log("❌ sendPhoto failed: \(jsonString(response["@type"]) ?? "?") — \(jsonString(response["message"]) ?? "")") }
+                else { log("✅ sendPhoto accepted") }
+                DispatchQueue.main.async { completion(ok) }
             }
-            log("📸 sendPhoto: createPrivateChat returned \(type), using chatId=\(tdChatId)")
 
             var content: [String: Any] = [
                 "@type": "inputMessagePhoto",
-                "photo": [
-                    "@type": "inputFileLocal",
-                    "path": photoPath,
-                ],
+                "photo": ["@type": "inputFileLocal", "path": photoPath],
             ]
             if let caption = caption, !caption.isEmpty {
-                content["caption"] = [
-                    "@type": "formattedText",
-                    "text": caption,
-                ]
+                content["caption"] = ["@type": "formattedText", "text": caption]
             }
-
-            log("📸 sendPhoto: sending message with photo at \(photoPath)")
-            self.send([
+            self.tdSend([
                 "@type": "sendMessage",
-                "@extra": sendExtra,
+                "@extra": extra,
                 "chat_id": tdChatId,
                 "input_message_content": content,
             ])
         }
+    }
 
-        pendingCallbacks[sendExtra] = { response in
-            let type = response["@type"] as? String ?? ""
-            let ok = type == "message"
-            if !ok {
-                log("❌ sendPhoto failed: \(type) — \(response)")
+    // MARK: - Chat Resolution
+
+    /// Ensures a private chat exists for the given user ID. Returns the chat_id.
+    private func ensureChat(userId: Int64, completion: @escaping (Int64?) -> Void) {
+        let extra = "ensure_chat_\(userId)_\(UUID().uuidString.prefix(8))"
+        setCallback(extra: extra) { response in
+            let type = jsonString(response["@type"]) ?? ""
+            if type == "chat", let cid = jsonInt64(response["id"]) {
+                completion(cid)
+            } else if type == "error" {
+                log("❌ createPrivateChat(\(userId)): \(jsonString(response["message"]) ?? "?")")
+                completion(nil)
             } else {
-                log("✅ sendPhoto: TDLib accepted message")
+                completion(nil)
             }
-            DispatchQueue.main.async { completion(ok) }
         }
-
-        send([
+        tdSend([
             "@type": "createPrivateChat",
-            "@extra": chatExtra,
-            "user_id": chatId,
+            "@extra": extra,
+            "user_id": userId,
             "force": true,
         ])
     }
 
-    private var pendingCallbacks: [String: ([String: Any]) -> Void] = [:]
+    // MARK: - Callback Management (thread-safe)
 
-    var isLoggedIn: Bool { authState == .ready }
-
-    /// Gracefully close TDLib — releases database lock
-    func close(completion: (() -> Void)? = nil) {
-        guard running else { completion?(); return }
-        running = false
-        log("🔒 Closing TDLib client \(clientId)...")
-
-        // Guard against double-completion (close response + fallback timer)
-        var completionCalled = false
-        let safeComplete = {
-            DispatchQueue.main.async {
-                guard !completionCalled else { return }
-                completionCalled = true
-                completion?()
-            }
-        }
-
-        // Register callback for authorizationStateClosed
-        let extra = "close_\(clientId)"
-        pendingCallbacks[extra] = { [weak self] _ in
-            if let self = self {
-                TelegramClient.clientsLock.lock()
-                TelegramClient.clients.removeValue(forKey: self.clientId)
-                TelegramClient.clientsLock.unlock()
-            }
-            log("🔒 TDLib client closed")
-            safeComplete()
-        }
-
-        send(["@type": "close", "@extra": extra])
-
-        // Fallback: if close doesn't respond in 3s, force cleanup
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
-            if let self = self {
-                TelegramClient.clientsLock.lock()
-                TelegramClient.clients.removeValue(forKey: self.clientId)
-                TelegramClient.clientsLock.unlock()
-            }
-            safeComplete()
-        }
+    private func setCallback(extra: String, handler: @escaping ([String: Any]) -> Void) {
+        callbackLock.lock()
+        pendingCallbacks[extra] = handler
+        callbackLock.unlock()
     }
 
-    // MARK: - Client Registry (for shared receive loop)
-
-    private static let clientsLock = NSLock()
-    private static var clients: [Int32: TelegramClient] = [:]
-
-    private func registerClient() {
-        TelegramClient.clientsLock.lock()
-        TelegramClient.clients[clientId] = self
-        TelegramClient.clientsLock.unlock()
-        log("📋 Client \(clientId) registered (total: \(TelegramClient.clients.count))")
+    private func popCallback(extra: String) -> (([String: Any]) -> Void)? {
+        callbackLock.lock()
+        let cb = pendingCallbacks.removeValue(forKey: extra)
+        callbackLock.unlock()
+        return cb
     }
 
-    private static func globalReceiveLoop() {
-        guard let receiveFn = _td_receive else {
-            log("❌ td_receive not available — receive loop not started")
-            return
-        }
-        log("🔄 TDLib receive loop started")
-        while true {
-            guard let resultPtr = receiveFn(1.0) else { continue }
-            let json = String(cString: resultPtr)
+    // MARK: - TDLib Send (thread-safe)
 
-            guard let data = json.data(using: .utf8),
-                  let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
-
-            let type = dict["@type"] as? String ?? "?"
-
-            // Parse client_id — TDLib uses @client_id, NSNumber needs Int cast
-            var clientId: Int32 = -1
-            for key in ["@client_id", "client_id"] {
-                if let val = dict[key] {
-                    if let n = val as? NSNumber {
-                        clientId = n.int32Value
-                        break
-                    }
-                }
-            }
-
-            if clientId < 0 {
-                // No client_id — dispatch to first registered client
-                clientsLock.lock()
-                let first = clients.values.first
-                clientsLock.unlock()
-                if let first = first {
-                    first.handleUpdate(type: type, data: dict)
-                }
-                continue
-            }
-
-            clientsLock.lock()
-            let client = clients[clientId]
-            clientsLock.unlock()
-
-            if let client = client {
-                // Check for @extra callback first
-                if let extra = dict["@extra"] as? String {
-                    let callback = client.pendingCallbacks.removeValue(forKey: extra)
-                    if let callback = callback {
-                        callback(dict)
-                    } else {
-                        client.handleUpdate(type: type, data: dict)
-                    }
-                } else {
-                    client.handleUpdate(type: type, data: dict)
-                }
-            } else {
-                log("⚠️ TDLib response for unknown client \(clientId): \(type)")
-            }
-        }
-    }
-
-    // MARK: - Internal
-
-    private func send(_ dict: [String: Any]) {
-        guard let sendFn = _td_send else { return }
+    private func tdSend(_ dict: [String: Any]) {
+        guard let sendFn = _td_send, clientId >= 0 else { return }
         guard let data = try? JSONSerialization.data(withJSONObject: dict),
               let json = String(data: data, encoding: .utf8) else { return }
         json.withCString { sendFn(clientId, $0) }
     }
 
-    private func handleUpdate(type: String, data: [String: Any]) {
-        switch type {
-        case "updateAuthorizationState":
-            guard let authState = data["authorization_state"] as? [String: Any],
-                  let stateType = authState["@type"] as? String else { return }
+    // MARK: - Receive Loop (single thread, process-wide)
 
-            switch stateType {
-            case "authorizationStateWaitTdlibParameters":
-                log("📋 TDLib requesting parameters...")
-                send([
-                    "@type": "setTdlibParameters",
-                    "database_directory": tdlibDataDir(),
-                    "files_directory": tdlibDataDir() + "/files",
-                    "database_encryption_key": "",
-                    "use_file_database": true,
-                    "use_chat_info_database": true,
-                    "use_message_database": true,
-                    "use_secret_chats": false,
-                    "api_id": apiId,
-                    "api_hash": apiHash,
-                    "system_language_code": "en",
-                    "device_model": "macOS",
-                    "system_version": "",
-                    "application_version": "1.0.0",
-                ])
-            case "authorizationStateWaitPhoneNumber":
-                updateAuthState(.waitingForPhone)
-            case "authorizationStateWaitCode":
-                updateAuthState(.waitingForCode)
-            case "authorizationStateWaitPassword":
-                updateAuthState(.waitingForPassword)
-            case "authorizationStateReady":
-                updateAuthState(.ready)
-                log("✅ TDLib: logged in")
-            case "authorizationStateClosed":
-                updateAuthState(.closed)
-            default:
-                log("📋 TDLib auth state: \(stateType)")
-                break
+    private static func receiveLoop() {
+        guard let receiveFn = _td_receive else {
+            log("❌ td_receive unavailable")
+            return
+        }
+
+        while true {
+            guard let ptr = receiveFn(1.0) else { continue }
+            let json = String(cString: ptr)
+
+            guard let data = json.data(using: .utf8),
+                  let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { continue }
+
+            // Route to the right client
+            let cid = jsonInt32(dict["@client_id"]) ?? jsonInt32(dict["client_id"]) ?? -1
+
+            registryLock.lock()
+            let client = cid >= 0 ? clients[cid] : clients.values.first
+            registryLock.unlock()
+
+            guard let client = client else {
+                let type = jsonString(dict["@type"]) ?? "?"
+                if type != "updateOption" { // updateOption is noisy
+                    log("⚠️ TDLib update for unknown client \(cid): \(type)")
+                }
+                continue
             }
 
+            // Check for @extra callback
+            if let extra = jsonString(dict["@extra"]), let cb = client.popCallback(extra: extra) {
+                cb(dict)
+            } else {
+                client.handleUpdate(dict)
+            }
+        }
+    }
+
+    // MARK: - Update Handler
+
+    private func handleUpdate(_ data: [String: Any]) {
+        let type = jsonString(data["@type"]) ?? ""
+
+        switch type {
+        case "updateAuthorizationState":
+            guard let state = data["authorization_state"] as? [String: Any],
+                  let stateType = jsonString(state["@type"]) else { return }
+            handleAuthUpdate(stateType)
+
         case "error":
-            let msg = data["message"] as? String ?? "Unknown error"
-            let code = data["code"] as? Int ?? 0
-            // Ignore the "call setTdlibParameters first" error — it's a timing artifact
+            let msg = jsonString(data["message"]) ?? "Unknown error"
+            let code = jsonInt32(data["code"]) ?? 0
             if msg.contains("setTdlibParameters") {
-                log("⚠️ TDLib init timing error (ignored): \(msg)")
+                // Timing artifact — ignore
             } else {
                 log("❌ TDLib error (\(code)): \(msg)")
                 DispatchQueue.main.async { self.onError?(msg) }
@@ -443,17 +339,113 @@ class TelegramClient {
         }
     }
 
-    private func updateAuthState(_ state: AuthState) {
+    private func handleAuthUpdate(_ stateType: String) {
+        switch stateType {
+        case "authorizationStateWaitTdlibParameters":
+            log("📋 TDLib requesting parameters...")
+            tdSend([
+                "@type": "setTdlibParameters",
+                "database_directory": tdlibDataDir(),
+                "files_directory": tdlibDataDir() + "/files",
+                "database_encryption_key": "",
+                "use_file_database": true,
+                "use_chat_info_database": true,
+                "use_message_database": true,
+                "use_secret_chats": false,
+                "api_id": apiId,
+                "api_hash": apiHash,
+                "system_language_code": "en",
+                "device_model": "macOS",
+                "system_version": "",
+                "application_version": "1.2.0",
+            ])
+
+        case "authorizationStateWaitPhoneNumber":
+            setAuthState(.waitingForPhone)
+
+        case "authorizationStateWaitCode":
+            setAuthState(.waitingForCode)
+
+        case "authorizationStateWaitPassword":
+            setAuthState(.waitingForPassword)
+
+        case "authorizationStateReady":
+            setAuthState(.ready)
+            log("✅ TDLib: authenticated")
+
+        case "authorizationStateLoggingOut":
+            log("🔒 TDLib: logging out...")
+
+        case "authorizationStateClosed":
+            log("🔒 TDLib: session closed — will re-create client")
+            setAuthState(.closed)
+            // TDLib client is dead after close. Create a new one.
+            recreateClient()
+
+        default:
+            log("📋 TDLib auth: \(stateType)")
+        }
+    }
+
+    private func setAuthState(_ state: AuthState) {
         DispatchQueue.main.async {
+            log("📋 Auth state: \(state)")
             self.authState = state
             self.onAuthStateChanged?(state)
         }
     }
+
+    /// After TDLib reports `authorizationStateClosed`, the client ID is dead.
+    /// Create a fresh one (keeps the same TelegramClient object).
+    private func recreateClient() {
+        guard let createFn = _td_create else { return }
+
+        // Remove old client from registry
+        TelegramClient.registryLock.lock()
+        TelegramClient.clients.removeValue(forKey: clientId)
+        TelegramClient.registryLock.unlock()
+
+        // Create new client
+        let oldId = clientId
+        clientId = createFn()
+
+        TelegramClient.registryLock.lock()
+        TelegramClient.clients[clientId] = self
+        TelegramClient.registryLock.unlock()
+
+        log("📋 TDLib client recreated: \(oldId) → \(clientId)")
+
+        // TDLib will immediately send authorizationStateWaitTdlibParameters
+        // for the new client, which our receive loop will handle.
+    }
+
+    // MARK: - Paths
 
     private func tdlibDataDir() -> String {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let dir = appSupport.appendingPathComponent("TelegramVoiceHotkey/tdlib")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.path
+    }
+
+    // MARK: - Logging Config (once per process)
+
+    private static var loggingConfigured = false
+    private static func configureLogging() {
+        guard !loggingConfigured, let execFn = _td_execute else { return }
+        loggingConfigured = true
+
+        let logDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("TelegramVoiceHotkey")
+        try? FileManager.default.createDirectory(at: logDir, withIntermediateDirectories: true)
+        let tdLogPath = logDir.appendingPathComponent("tdlib.log").path
+
+        let logReq = "{\"@type\":\"setLogStream\",\"log_stream\":{\"@type\":\"logStreamFile\",\"path\":\"\(tdLogPath)\",\"max_file_size\":10485760,\"redirect_stderr\":false}}"
+        logReq.withCString { _ = execFn($0) }
+
+        let verbReq = "{\"@type\":\"setLogVerbosityLevel\",\"new_verbosity_level\":1}"
+        verbReq.withCString { _ = execFn($0) }
+
+        log("📋 TDLib logs → \(tdLogPath)")
     }
 }

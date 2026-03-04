@@ -280,14 +280,22 @@ class TelegramClient {
 
     // MARK: - Client Registry (for shared receive loop)
 
+    private static let clientsLock = NSLock()
     private static var clients: [Int32: TelegramClient] = [:]
 
     private func registerClient() {
+        TelegramClient.clientsLock.lock()
         TelegramClient.clients[clientId] = self
+        TelegramClient.clientsLock.unlock()
+        log("📋 Client \(clientId) registered (total: \(TelegramClient.clients.count))")
     }
 
     private static func globalReceiveLoop() {
-        guard let receiveFn = _td_receive else { return }
+        guard let receiveFn = _td_receive else {
+            log("❌ td_receive not available — receive loop not started")
+            return
+        }
+        log("🔄 TDLib receive loop started")
         while true {
             guard let resultPtr = receiveFn(1.0) else { continue }
             let json = String(cString: resultPtr)
@@ -297,31 +305,42 @@ class TelegramClient {
 
             let type = dict["@type"] as? String ?? "?"
 
-            // TDLib includes client_id in responses — try both key formats
-            let clientId: Int32
-            if let cid = dict["client_id"] as? Int32 {
-                clientId = cid
-            } else if let cid = dict["@client_id"] as? Int32 {
-                clientId = cid
-            } else if let cid = dict["client_id"] as? Int {
-                clientId = Int32(cid)
-            } else if let cid = dict["@client_id"] as? Int {
-                clientId = Int32(cid)
-            } else {
-                log("⚠️ TDLib response missing client_id: \(type)")
-                // Try dispatching to first registered client
-                if let first = clients.values.first {
+            // Parse client_id — TDLib uses @client_id, NSNumber needs Int cast
+            var clientId: Int32 = -1
+            for key in ["@client_id", "client_id"] {
+                if let val = dict[key] {
+                    if let n = val as? NSNumber {
+                        clientId = n.int32Value
+                        break
+                    }
+                }
+            }
+
+            if clientId < 0 {
+                // No client_id — dispatch to first registered client
+                clientsLock.lock()
+                let first = clients.values.first
+                clientsLock.unlock()
+                if let first = first {
                     first.handleUpdate(type: type, data: dict)
                 }
                 continue
             }
 
-            if let client = clients[clientId] {
+            clientsLock.lock()
+            let client = clients[clientId]
+            clientsLock.unlock()
+
+            if let client = client {
                 // Check for @extra callback first
-                if let extra = dict["@extra"] as? String,
-                   let callback = client.pendingCallbacks.removeValue(forKey: extra) {
-                    callback(dict)
-                } else if let type = dict["@type"] as? String {
+                if let extra = dict["@extra"] as? String {
+                    let callback = client.pendingCallbacks.removeValue(forKey: extra)
+                    if let callback = callback {
+                        callback(dict)
+                    } else {
+                        client.handleUpdate(type: type, data: dict)
+                    }
+                } else {
                     client.handleUpdate(type: type, data: dict)
                 }
             } else {

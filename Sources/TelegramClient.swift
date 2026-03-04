@@ -90,7 +90,7 @@ class TelegramClient {
         let logFileReq = "{\"@type\":\"setLogStream\",\"log_stream\":{\"@type\":\"logStreamFile\",\"path\":\"\(tdLogPath)\",\"max_file_size\":10485760,\"redirect_stderr\":false}}"
         logFileReq.withCString { _ = execFn($0) }
 
-        let verbReq = "{\"@type\":\"setLogVerbosityLevel\",\"new_verbosity_level\":5}"
+        let verbReq = "{\"@type\":\"setLogVerbosityLevel\",\"new_verbosity_level\":1}"
         verbReq.withCString { _ = execFn($0) }
 
         log("📋 TDLib logs → \(tdLogPath)")
@@ -213,10 +213,6 @@ class TelegramClient {
                   let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
 
             let type = dict["@type"] as? String ?? "?"
-            // Log all TDLib responses for debugging
-            if type != "updateOption" {
-                log("📥 TDLib response: \(json.prefix(500))")
-            }
 
             // TDLib includes client_id in responses — try both key formats
             let clientId: Int32
@@ -257,10 +253,6 @@ class TelegramClient {
         guard let sendFn = _td_send else { return }
         guard let data = try? JSONSerialization.data(withJSONObject: dict),
               let json = String(data: data, encoding: .utf8) else { return }
-        let type = dict["@type"] as? String ?? "?"
-        if type == "setTdlibParameters" {
-            log("📤 Sending to TDLib (client \(clientId)): \(json)")
-        }
         json.withCString { sendFn(clientId, $0) }
     }
 

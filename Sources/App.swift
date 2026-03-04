@@ -124,67 +124,98 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    var eventTap: CFMachPort?
+
     func startListening() {
-        let targetKeyCode = config.hotkeyKeyCode
-        let targetModifiers = NSEvent.ModifierFlags(rawValue: config.hotkeyModifiers)
-            .intersection(.deviceIndependentFlagsMask)
+        let eventMask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue)
+
+        // Store config values for the callback
+        let targetKeyCode = CGKeyCode(config.hotkeyKeyCode)
+        let targetModifiers = config.hotkeyModifiers
         let mode = config.recordingMode
 
-        func hotkeyMatches(_ event: NSEvent) -> Bool {
-            guard event.keyCode == targetKeyCode else { return false }
-            let eventMods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            return eventMods == targetModifiers
+        // Use Unmanaged to pass self to the C callback
+        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
+
+        guard let tap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: CGEventMask(eventMask),
+            callback: { (proxy, type, event, refcon) -> Unmanaged<CGEvent>? in
+                guard let refcon = refcon else { return Unmanaged.passUnretained(event) }
+                let appDelegate = Unmanaged<AppDelegate>.fromOpaque(refcon).takeUnretainedValue()
+                return appDelegate.handleCGEvent(proxy: proxy, type: type, event: event)
+            },
+            userInfo: selfPtr
+        ) else {
+            print("❌ Failed to create event tap — check Accessibility permissions")
+            return
         }
 
-        switch mode {
+        self.eventTap = tap
+        self._targetKeyCode = targetKeyCode
+        self._targetModifiers = targetModifiers
+        self._mode = mode
+
+        let runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+        CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
+        CGEvent.tapEnable(tap: tap, enable: true)
+
+        print("🎤 Event tap active")
+    }
+
+    var _targetKeyCode: CGKeyCode = 0
+    var _targetModifiers: UInt = 0
+    var _mode: RecordingMode = .holdToRecord
+
+    func handleCGEvent(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        // Re-enable tap if disabled by system
+        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            if let tap = eventTap {
+                CGEvent.tapEnable(tap: tap, enable: true)
+            }
+            return Unmanaged.passUnretained(event)
+        }
+
+        let keyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
+        let flags = event.flags
+        let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+
+        // Build comparable modifier mask (strip caps lock, etc.)
+        let relevantFlags: CGEventFlags = [.maskCommand, .maskShift, .maskControl, .maskAlternate]
+        let currentMods = flags.intersection(relevantFlags)
+        let targetMods = CGEventFlags(rawValue: UInt64(
+            NSEvent.ModifierFlags(rawValue: _targetModifiers)
+                .intersection(.deviceIndependentFlagsMask).rawValue
+        ))
+
+        let hotkeyMatch = keyCode == _targetKeyCode && currentMods == targetMods
+
+        switch _mode {
         case .holdToRecord:
-            // Hold mode: key down starts, key up stops
-            NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-                guard hotkeyMatches(event), !event.isARepeat else { return }
-                self?.startRecording()
+            if type == .keyDown && hotkeyMatch && !isRepeat {
+                startRecording()
+                return nil // suppress the event — no beep
             }
-            NSEvent.addGlobalMonitorForEvents(matching: .keyUp) { [weak self] event in
-                guard event.keyCode == targetKeyCode else { return }
-                self?.stopAndSend()
-            }
-            NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-                if hotkeyMatches(event), !event.isARepeat {
-                    self?.startRecording()
-                    return nil
-                }
-                return event
-            }
-            NSEvent.addLocalMonitorForEvents(matching: .keyUp) { [weak self] event in
-                if event.keyCode == targetKeyCode {
-                    self?.stopAndSend()
-                    return nil
-                }
-                return event
+            if type == .keyUp && keyCode == _targetKeyCode && isRecording {
+                stopAndSend()
+                return nil
             }
 
         case .pressToToggle:
-            // Toggle mode: hotkey starts recording, ANY key stops & sends
-            NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-                guard let self = self else { return }
-                if self.isRecording {
-                    // Any key stops recording
-                    self.stopAndSend()
-                } else if hotkeyMatches(event), !event.isARepeat {
-                    self.startRecording()
-                }
-            }
-            NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-                guard let self = self else { return event }
-                if self.isRecording {
-                    self.stopAndSend()
+            if type == .keyDown {
+                if isRecording {
+                    stopAndSend()
                     return nil
-                } else if hotkeyMatches(event), !event.isARepeat {
-                    self.startRecording()
+                } else if hotkeyMatch && !isRepeat {
+                    startRecording()
                     return nil
                 }
-                return event
             }
         }
+
+        return Unmanaged.passUnretained(event)
     }
 
     func updateIcon(recording: Bool) {

@@ -131,9 +131,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         tryStartListening()
     }
 
-    // MARK: - Accessibility
+    // MARK: - Permissions (Accessibility + Screen Recording)
+
+    func requestAllPermissions() {
+        // Trigger Screen Recording permission prompt (needed for screenshot feature).
+        // CGWindowListCopyWindowInfo triggers the system dialog on first call.
+        let _ = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID)
+        log("📸 Screen Recording permission requested")
+    }
 
     func tryStartListening() {
+        // Request all permissions upfront (one-time onboarding)
+        requestAllPermissions()
+
         if AXIsProcessTrusted() {
             startListening()
             buildMenu()

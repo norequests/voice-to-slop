@@ -406,6 +406,10 @@ class SetupWindowController: NSWindowController, NSWindowDelegate {
         case .closed:
             loginButton.title = "Send Code"
             loginButton.isEnabled = true
+        case .initializing, .loggingOut:
+            loginButton.isEnabled = false
+            loginStatus.stringValue = "⏳ \(state)..."
+            loginStatus.textColor = .secondaryLabelColor
         }
     }
 

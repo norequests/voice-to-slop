@@ -1,4 +1,4 @@
-# Telegram Voice Hotkey
+# Voice to Slop
 
 A macOS menu bar app that lets you send Telegram voice notes to your Openclaw with a global keyboard shortcut.
 

@@ -1,13 +1,54 @@
 import Foundation
-import CTDLib
+
+// Dynamically load TDLib so the app works without it (Bot API mode)
+private let tdlibHandle: UnsafeMutableRawPointer? = {
+    // Look in app bundle first, then system
+    let bundled = Bundle.main.resourceURL?.appendingPathComponent("lib/libtdjson.dylib").path
+    if let path = bundled, FileManager.default.fileExists(atPath: path) {
+        return dlopen(path, RTLD_NOW)
+    }
+    // Try versioned name
+    let bundledVersioned = Bundle.main.resourceURL?.appendingPathComponent("lib/libtdjson.1.8.62.dylib").path
+    if let path = bundledVersioned, FileManager.default.fileExists(atPath: path) {
+        return dlopen(path, RTLD_NOW)
+    }
+    // System paths
+    for path in ["/opt/homebrew/lib/libtdjson.dylib", "/usr/local/lib/libtdjson.dylib"] {
+        if FileManager.default.fileExists(atPath: path) {
+            return dlopen(path, RTLD_NOW)
+        }
+    }
+    return nil
+}()
+
+// Function pointers
+private typealias TdCreateClientId = @convention(c) () -> Int32
+private typealias TdSend = @convention(c) (Int32, UnsafePointer<CChar>) -> Void
+private typealias TdReceive = @convention(c) (Double) -> UnsafePointer<CChar>?
+private typealias TdExecute = @convention(c) (UnsafePointer<CChar>) -> UnsafePointer<CChar>?
+
+private let _td_create_client_id: TdCreateClientId? = {
+    guard let h = tdlibHandle, let sym = dlsym(h, "td_create_client_id") else { return nil }
+    return unsafeBitCast(sym, to: TdCreateClientId.self)
+}()
+
+private let _td_send: TdSend? = {
+    guard let h = tdlibHandle, let sym = dlsym(h, "td_send") else { return nil }
+    return unsafeBitCast(sym, to: TdSend.self)
+}()
+
+private let _td_receive: TdReceive? = {
+    guard let h = tdlibHandle, let sym = dlsym(h, "td_receive") else { return nil }
+    return unsafeBitCast(sym, to: TdReceive.self)
+}()
 
 /// Wraps TDLib JSON client for sending messages as the authenticated user.
+/// Loaded dynamically — if TDLib isn't available, isAvailable returns false.
 class TelegramClient {
-    private let clientId: Int32
+    private var clientId: Int32 = -1
     private var running = false
     private let queue = DispatchQueue(label: "tdlib.receive", qos: .background)
 
-    // Auth state
     enum AuthState {
         case waitingForPhone
         case waitingForCode
@@ -20,20 +61,29 @@ class TelegramClient {
     var onAuthStateChanged: ((AuthState) -> Void)?
     var onError: ((String) -> Void)?
 
-    // Telegram API credentials (get from https://my.telegram.org)
     private let apiId: Int
     private let apiHash: String
+
+    static var isAvailable: Bool {
+        return tdlibHandle != nil && _td_create_client_id != nil
+    }
 
     init(apiId: Int, apiHash: String) {
         self.apiId = apiId
         self.apiHash = apiHash
-        self.clientId = td_create_client_id()
+        if let create = _td_create_client_id {
+            self.clientId = create()
+        }
     }
 
     func start() {
+        guard TelegramClient.isAvailable, clientId >= 0 else {
+            log("❌ TDLib not available")
+            return
+        }
+
         running = true
 
-        // Set TDLib parameters
         send([
             "@type": "setTdlibParameters",
             "database_directory": tdlibDataDir(),
@@ -46,7 +96,6 @@ class TelegramClient {
             "application_version": "1.0.0",
         ])
 
-        // Start receive loop
         queue.async { [weak self] in
             self?.receiveLoop()
         }
@@ -57,30 +106,17 @@ class TelegramClient {
         send(["@type": "close"])
     }
 
-    // MARK: - Auth
-
     func sendPhoneNumber(_ phone: String) {
-        send([
-            "@type": "setAuthenticationPhoneNumber",
-            "phone_number": phone,
-        ])
+        send(["@type": "setAuthenticationPhoneNumber", "phone_number": phone])
     }
 
     func sendCode(_ code: String) {
-        send([
-            "@type": "checkAuthenticationCode",
-            "code": code,
-        ])
+        send(["@type": "checkAuthenticationCode", "code": code])
     }
 
     func sendPassword(_ password: String) {
-        send([
-            "@type": "checkAuthenticationPassword",
-            "password": password,
-        ])
+        send(["@type": "checkAuthenticationPassword", "password": password])
     }
-
-    // MARK: - Send Voice Note
 
     func sendVoiceNote(chatId: Int64, filePath: String, duration: Int, completion: @escaping (Bool) -> Void) {
         let requestId = UUID().uuidString
@@ -97,39 +133,26 @@ class TelegramClient {
                 "duration": duration,
             ],
         ])
-        // For simplicity, assume success after a short delay
-        // In production, track @extra to match response
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
             completion(true)
         }
     }
 
-    // MARK: - Get chat by username/title
-
-    func searchChat(username: String, completion: @escaping (Int64?) -> Void) {
-        let extra = UUID().uuidString
-        send([
-            "@type": "searchPublicChat",
-            "@extra": extra,
-            "username": username,
-        ])
-        // Simplified — in production, track responses by @extra
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-            completion(nil) // Would parse from response
-        }
-    }
+    var isLoggedIn: Bool { authState == .ready }
 
     // MARK: - Internal
 
     private func send(_ dict: [String: Any]) {
+        guard let sendFn = _td_send else { return }
         guard let data = try? JSONSerialization.data(withJSONObject: dict),
               let json = String(data: data, encoding: .utf8) else { return }
-        td_send(clientId, json)
+        json.withCString { sendFn(clientId, $0) }
     }
 
     private func receiveLoop() {
+        guard let receiveFn = _td_receive else { return }
         while running {
-            guard let resultPtr = td_receive(1.0) else { continue }
+            guard let resultPtr = receiveFn(1.0) else { continue }
             let json = String(cString: resultPtr)
 
             guard let data = json.data(using: .utf8),
@@ -155,7 +178,7 @@ class TelegramClient {
                 updateAuthState(.waitingForPassword)
             case "authorizationStateReady":
                 updateAuthState(.ready)
-                log("✅ Telegram User API: logged in")
+                log("✅ TDLib: logged in")
             case "authorizationStateClosed":
                 updateAuthState(.closed)
             default:
@@ -184,9 +207,5 @@ class TelegramClient {
         let dir = appSupport.appendingPathComponent("TelegramVoiceHotkey/tdlib")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.path
-    }
-
-    var isLoggedIn: Bool {
-        authState == .ready
     }
 }

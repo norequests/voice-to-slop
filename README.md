@@ -1,6 +1,6 @@
 # Telegram Voice Hotkey
 
-A macOS menu bar app that lets you send Telegram voice notes with a global keyboard shortcut.
+A macOS menu bar app that lets you send Telegram voice notes to your Openclaw with a global keyboard shortcut.
 
 Hold a hotkey → record → release → voice note sent as **you** via Telegram's User API.
 

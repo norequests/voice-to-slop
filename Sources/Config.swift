@@ -97,7 +97,11 @@ struct Config: Codable {
         case .botAPI:
             return !botToken.isEmpty && !chatId.isEmpty
         case .userAPI:
-            return apiId > 0 && !apiHash.isEmpty && !chatId.isEmpty && userLoggedIn
+            return apiId > 0 && !apiHash.isEmpty && !chatId.isEmpty
         }
+    }
+
+    var isUserAPIReady: Bool {
+        sendMode == .userAPI && apiId > 0 && !apiHash.isEmpty && userLoggedIn
     }
 }

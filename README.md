@@ -15,7 +15,11 @@ Hold a hotkey → record → release → voice note sent as **you** via Telegram
 3. Drag `TelegramVoiceHotkey.app` to `/Applications/`
 4. Open it — if macOS blocks it, go to **System Settings → Privacy & Security** and click "Open Anyway"
 
-> **Note:** The app is not notarized (no Apple Developer account). You may need to right-click → Open the first time.
+> **Note:** The app is not notarized. macOS may say it's "damaged." Fix with:
+> ```bash
+> xattr -cr /Applications/TelegramVoiceHotkey.app
+> ```
+> Or right-click → Open the first time.
 
 ### Option 2: Build from source
 

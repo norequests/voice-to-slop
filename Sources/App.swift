@@ -411,15 +411,58 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
 
-        sendVoice(fileURL: url) { success in
-            try? FileManager.default.removeItem(at: url)
-            print(success ? "✅ Sent to Telegram" : "❌ Send failed")
+        // Convert m4a → ogg/opus for native Telegram voice playback
+        let oggURL = url.deletingPathExtension().appendingPathExtension("ogg")
+        convertToOgg(input: url, output: oggURL) { [self] success in
+            let sendURL = success ? oggURL : url
+            let filename = success ? "voice.ogg" : "voice.m4a"
+            let mime = success ? "audio/ogg" : "audio/m4a"
+
+            self.sendVoice(fileURL: sendURL, filename: filename, mimeType: mime) { sent in
+                try? FileManager.default.removeItem(at: url)
+                try? FileManager.default.removeItem(at: oggURL)
+                log(sent ? "✅ Sent to Telegram" : "❌ Send failed")
+            }
+        }
+    }
+
+    func convertToOgg(input: URL, output: URL, completion: @escaping (Bool) -> Void) {
+        // Use afconvert (built into macOS) to convert to CAF, then use opusenc if available
+        // Simplest: use ffmpeg if installed, otherwise send m4a as-is
+        let ffmpeg = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"]
+            .first { FileManager.default.fileExists(atPath: $0) }
+
+        guard let ffmpegPath = ffmpeg else {
+            log("⚠️ ffmpeg not found — sending m4a (install: brew install ffmpeg)")
+            completion(false)
+            return
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: ffmpegPath)
+        process.arguments = ["-y", "-i", input.path, "-c:a", "libopus", "-b:a", "32k", "-vn", output.path]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+            if process.terminationStatus == 0 {
+                log("🔄 Converted to OGG/Opus")
+                completion(true)
+            } else {
+                log("⚠️ ffmpeg failed (exit \(process.terminationStatus)) — sending m4a")
+                completion(false)
+            }
+        } catch {
+            log("⚠️ ffmpeg error: \(error) — sending m4a")
+            completion(false)
         }
     }
 
     // MARK: - Telegram API
 
-    func sendVoice(fileURL: URL, completion: @escaping (Bool) -> Void) {
+    func sendVoice(fileURL: URL, filename: String, mimeType: String, completion: @escaping (Bool) -> Void) {
         let endpoint = URL(string: "https://api.telegram.org/bot\(config.botToken)/sendVoice")!
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
@@ -432,8 +475,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         body.append("Content-Disposition: form-data; name=\"chat_id\"\r\n\r\n".data(using: .utf8)!)
         body.append("\(config.chatId)\r\n".data(using: .utf8)!)
         body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Disposition: form-data; name=\"voice\"; filename=\"voice.m4a\"\r\n".data(using: .utf8)!)
-        body.append("Content-Type: audio/m4a\r\n\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"voice\"; filename=\"\(filename)\"\r\n".data(using: .utf8)!)
+        body.append("Content-Type: \(mimeType)\r\n\r\n".data(using: .utf8)!)
 
         do {
             body.append(try Data(contentsOf: fileURL))

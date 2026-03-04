@@ -108,38 +108,58 @@ class SetupWindowController: NSWindowController, NSWindowDelegate {
         contentView.addSubview(apiHelpLabel)
         y -= 35
 
-        phoneLabel.frame = NSRect(x: 20, y: y, width: 90, height: 20)
-        contentView.addSubview(phoneLabel)
-
-        phoneField.frame = NSRect(x: 115, y: y - 2, width: 200, height: 24)
-        phoneField.placeholderString = "+1234567890"
-        phoneField.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-        contentView.addSubview(phoneField)
-
-        loginButton.frame = NSRect(x: 325, y: y - 3, width: 100, height: 26)
-        loginButton.bezelStyle = .rounded
-        loginButton.target = self
-        loginButton.action = #selector(handleLogin)
-        contentView.addSubview(loginButton)
-        y -= 35
-
-        codeLabel.frame = NSRect(x: 20, y: y, width: 90, height: 20)
-        contentView.addSubview(codeLabel)
-
-        codeField.frame = NSRect(x: 115, y: y - 2, width: 200, height: 24)
-        codeField.placeholderString = "12345"
-        codeField.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-        contentView.addSubview(codeField)
-
-        loginStatus.frame = NSRect(x: 325, y: y, width: 175, height: 20)
-        loginStatus.font = .systemFont(ofSize: 11)
-        loginStatus.textColor = .secondaryLabelColor
         if existing.userLoggedIn {
-            loginStatus.stringValue = "✅ Logged in"
+            // Already authenticated — show status instead of login fields
+            loginStatus.frame = NSRect(x: 115, y: y, width: 300, height: 20)
+            loginStatus.stringValue = "✅ Telegram authenticated"
+            loginStatus.font = .systemFont(ofSize: 13)
             loginStatus.textColor = .systemGreen
+            contentView.addSubview(loginStatus)
+
+            loginButton.frame = NSRect(x: 420, y: y - 3, width: 80, height: 26)
+            loginButton.title = "Re-auth"
+            loginButton.bezelStyle = .rounded
+            loginButton.target = self
+            loginButton.action = #selector(startReauth)
+            contentView.addSubview(loginButton)
+
+            // Hide login fields
+            phoneLabel.isHidden = true
+            phoneField.isHidden = true
+            codeLabel.isHidden = true
+            codeField.isHidden = true
+            y -= 40
+        } else {
+            // Not authenticated — show login flow
+            phoneLabel.frame = NSRect(x: 20, y: y, width: 90, height: 20)
+            contentView.addSubview(phoneLabel)
+
+            phoneField.frame = NSRect(x: 115, y: y - 2, width: 200, height: 24)
+            phoneField.placeholderString = "+1234567890"
+            phoneField.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+            contentView.addSubview(phoneField)
+
+            loginButton.frame = NSRect(x: 325, y: y - 3, width: 100, height: 26)
+            loginButton.bezelStyle = .rounded
+            loginButton.target = self
+            loginButton.action = #selector(handleLogin)
+            contentView.addSubview(loginButton)
+            y -= 35
+
+            codeLabel.frame = NSRect(x: 20, y: y, width: 90, height: 20)
+            contentView.addSubview(codeLabel)
+
+            codeField.frame = NSRect(x: 115, y: y - 2, width: 200, height: 24)
+            codeField.placeholderString = "12345"
+            codeField.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+            contentView.addSubview(codeField)
+
+            loginStatus.frame = NSRect(x: 325, y: y, width: 175, height: 20)
+            loginStatus.font = .systemFont(ofSize: 11)
+            loginStatus.textColor = .secondaryLabelColor
+            contentView.addSubview(loginStatus)
+            y -= 40
         }
-        contentView.addSubview(loginStatus)
-        y -= 40
 
         // ── Shared fields ──
         let chatLabel = makeLabel("Chat ID:")
@@ -222,6 +242,28 @@ class SetupWindowController: NSWindowController, NSWindowDelegate {
         codeField.isHidden = !isUserMode
         loginButton.isHidden = !isUserMode
         loginStatus.isHidden = !isUserMode
+    }
+
+    @objc func startReauth() {
+        // Clear TDLib session data to force re-login
+        let tdlibDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("TelegramVoiceHotkey/tdlib")
+        try? FileManager.default.removeItem(at: tdlibDir)
+
+        existingConfig.userLoggedIn = false
+        existingConfig.save()
+
+        // Show login fields
+        phoneLabel.isHidden = false
+        phoneField.isHidden = false
+        codeLabel.isHidden = false
+        codeField.isHidden = false
+        loginStatus.stringValue = "Enter phone to re-authenticate"
+        loginStatus.textColor = .secondaryLabelColor
+        loginButton.title = "Send Code"
+        loginButton.action = #selector(handleLogin)
+        loginButton.isEnabled = true
+        telegramClient = nil
     }
 
     @objc func handleLogin() {

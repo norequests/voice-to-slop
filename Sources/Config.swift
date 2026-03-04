@@ -23,6 +23,16 @@ struct Config: Codable {
     var apiHash: String
     var userLoggedIn: Bool
 
+    init(botToken: String, chatId: String, hotkeyKeyCode: UInt16, hotkeyModifiers: UInt,
+         hotkeyDisplay: String, recordingMode: RecordingMode, launchAtLogin: Bool,
+         sendMode: SendMode, apiId: Int, apiHash: String, userLoggedIn: Bool) {
+        self.botToken = botToken; self.chatId = chatId; self.hotkeyKeyCode = hotkeyKeyCode
+        self.hotkeyModifiers = hotkeyModifiers; self.hotkeyDisplay = hotkeyDisplay
+        self.recordingMode = recordingMode; self.launchAtLogin = launchAtLogin
+        self.sendMode = sendMode; self.apiId = apiId; self.apiHash = apiHash
+        self.userLoggedIn = userLoggedIn
+    }
+
     // Handle old configs missing new fields
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)

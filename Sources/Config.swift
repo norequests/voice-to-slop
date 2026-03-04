@@ -93,12 +93,11 @@ struct Config: Codable {
     }
 
     var isConfigured: Bool {
-        switch sendMode {
-        case .botAPI:
-            return !botToken.isEmpty && !chatId.isEmpty
-        case .userAPI:
-            return apiId > 0 && !apiHash.isEmpty && !chatId.isEmpty
-        }
+        // Configured if we have a chat ID and at least one send method available
+        guard !chatId.isEmpty else { return false }
+        let hasBotAPI = !botToken.isEmpty
+        let hasUserAPI = apiId > 0 && !apiHash.isEmpty
+        return hasBotAPI || hasUserAPI
     }
 
     var isUserAPIReady: Bool {

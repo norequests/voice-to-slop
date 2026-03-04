@@ -2,13 +2,6 @@
 # Build a proper .app bundle you can double-click and drag to /Applications
 set -e
 
-# Build TDLib if not already built
-if [ ! -f "tdlib-local/lib/libtdjson.dylib" ]; then
-    echo "📦 TDLib not found. Building (this takes a few minutes first time)..."
-    chmod +x scripts/setup-tdlib.sh
-    scripts/setup-tdlib.sh
-fi
-
 echo "🔨 Building..."
 swift build -c release
 
@@ -20,14 +13,16 @@ mkdir -p "$APP/Contents/Resources/lib"
 
 cp .build/release/TelegramVoiceHotkey "$APP/Contents/MacOS/"
 
-# Bundle TDLib
-# Copy all dylib files (resolving symlinks) so versioned names are present
-for f in tdlib-local/lib/libtdjson*.dylib; do
-    cp -L "$f" "$APP/Contents/Resources/lib/"
-done
-# Fix rpath in the binary
-install_name_tool -add_rpath "@executable_path/../Resources/lib" "$APP/Contents/MacOS/TelegramVoiceHotkey" 2>/dev/null || true
-echo "📦 Bundled TDLib ($(ls "$APP/Contents/Resources/lib/" | grep tdjson | tr '\n' ' '))"
+# Bundle TDLib (optional — only if built locally)
+if [ -d "tdlib-local/lib" ] && ls tdlib-local/lib/libtdjson*.dylib 1>/dev/null 2>&1; then
+    for f in tdlib-local/lib/libtdjson*.dylib; do
+        cp -L "$f" "$APP/Contents/Resources/lib/"
+    done
+    install_name_tool -add_rpath "@executable_path/../Resources/lib" "$APP/Contents/MacOS/TelegramVoiceHotkey" 2>/dev/null || true
+    echo "📦 Bundled TDLib ($(ls "$APP/Contents/Resources/lib/" | grep tdjson | tr '\n' ' '))"
+else
+    echo "⏭  TDLib not found — User API disabled (Bot API works fine)"
+fi
 
 # Bundle ffmpeg for OGG/Opus conversion
 SYS_FFMPEG=$(which ffmpeg 2>/dev/null || echo "")

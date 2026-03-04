@@ -200,14 +200,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: - TDLib User API
 
     func startTelegramClient() {
-        guard config.sendMode == .userAPI, config.apiId > 0, !config.apiHash.isEmpty else { return }
+        guard config.sendMode == .userAPI, config.apiId > 0, !config.apiHash.isEmpty else {
+            log("⏭ TDLib skipped — no valid API credentials")
+            return
+        }
+        guard TelegramClient.isAvailable else {
+            log("⏭ TDLib skipped — library not available")
+            return
+        }
         if telegramClient != nil { return }
 
         telegramClient = TelegramClient(apiId: config.apiId, apiHash: config.apiHash)
-        telegramClient?.onAuthStateChanged = { [weak self] state in
+        telegramClient?.onAuthStateChanged = { state in
             if state == .ready {
                 log("✅ TDLib: User authenticated and ready")
             }
+        }
+        telegramClient?.onError = { msg in
+            log("❌ TDLib error: \(msg)")
         }
         telegramClient?.start()
         log("🔑 TDLib client started")

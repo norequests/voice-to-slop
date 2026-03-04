@@ -81,6 +81,10 @@ class TelegramClient {
             log("❌ TDLib not available")
             return
         }
+        guard apiId > 0, !apiHash.isEmpty else {
+            log("❌ TDLib: invalid API credentials")
+            return
+        }
 
         running = true
 

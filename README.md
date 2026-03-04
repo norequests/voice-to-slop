@@ -1,83 +1,116 @@
 # Telegram Voice Hotkey
 
-A macOS menu bar app for sending Telegram voice notes with a global keyboard shortcut.
+A macOS menu bar app that lets you send Telegram voice notes with a global keyboard shortcut.
 
-Press a hotkey → record → release (or press any key) → voice note sent to Telegram.
+Hold a hotkey → record → release → voice note sent as **you** via Telegram's User API.
+
+## Install
+
+### Option 1: Download ZIP (easiest)
+
+1. Download the latest `.zip` from [**Releases**](https://github.com/norequests/telegram-voice-hotkey/releases)
+2. Unzip it
+3. Drag `TelegramVoiceHotkey.app` to `/Applications/`
+4. Open it — if macOS blocks it, go to **System Settings → Privacy & Security** and click "Open Anyway"
+
+> **Note:** The app is not notarized (no Apple Developer account). You may need to right-click → Open the first time.
+
+### Option 2: Build from source
+
+```bash
+# Install dependencies
+brew install cmake gperf openssl ffmpeg
+
+# Clone and build
+git clone https://github.com/norequests/telegram-voice-hotkey.git
+cd telegram-voice-hotkey
+
+# Build TDLib (first time only, ~5 minutes)
+./scripts/setup-tdlib.sh
+
+# Build the app
+./build.sh
+
+# Install
+sudo rm -rf /Applications/TelegramVoiceHotkey.app
+cp -r TelegramVoiceHotkey.app /Applications/
+```
+
+**Requirements:** macOS 13+ (Ventura or later), Xcode Command Line Tools (`xcode-select --install`)
+
+## Setup
+
+On first launch, a setup window appears.
+
+### 1. Get Telegram API credentials
+
+1. Go to [my.telegram.org](https://my.telegram.org)
+2. Log in with your phone number
+3. Click **API Development Tools**
+4. Create an app (any name/description)
+5. Copy your **API ID** and **API Hash**
+
+### 2. Configure the app
+
+- **API ID** — paste from step above
+- **API Hash** — paste from step above
+- **Phone** — your Telegram phone number (e.g. `+12125551234`)
+- Click **Send Code** → enter the 5-digit code from Telegram
+- **Chat ID** — the chat to send voice notes to (numeric ID)
+- **Hotkey** — click the field and press your desired key combo
+- **Mode** — hold-to-record (release sends) or press-to-toggle
+
+### 3. Grant permissions
+
+The app needs two macOS permissions:
+
+- **Microphone** — prompts automatically on first recording
+- **Accessibility** — required for the global hotkey. Grant in:
+  **System Settings → Privacy & Security → Accessibility**
+
+The app detects when permission is granted (no restart needed).
+
+## How to find a Chat ID
+
+The Chat ID is the numeric ID of the Telegram chat you want to send voice notes to.
+
+**Easiest method:** Use [@userinfobot](https://t.me/userinfobot) — forward a message from your target chat, and it'll tell you the ID.
+
+**For a bot:** Message the bot, then visit `https://api.telegram.org/bot<TOKEN>/getUpdates` and find `"chat":{"id":123456789}`.
 
 ## Features
 
 - **Global hotkey** — works from any app, any time
-- **Two recording modes** — hold-to-record or press-to-toggle
-- **Two send modes:**
-  - **Bot API** — sends via your bot (message appears from bot)
-  - **User API** — sends via TDLib as *you* (message appears from your account)
-- **Self-contained** — TDLib and ffmpeg bundled in the `.app`, no external dependencies
-- **OGG/Opus** — proper Telegram voice note format with waveform player
+- **Sends as you** — uses Telegram's User API (TDLib), messages appear from your account
+- **OGG/Opus format** — proper Telegram voice note with waveform player
+- **Self-contained** — TDLib and ffmpeg bundled in the `.app`
 - **Launch at login** — optional auto-start
-- **Menu bar status** — shows recording state, accessibility status, hotkey info
+- **Menu bar status** — live recording state, connection status, hotkey info
 
-## Install
+## Files
 
-### Download (easiest)
-Download `TelegramVoiceHotkey-macOS.zip` from [Releases](https://github.com/norequests/telegram-voice-hotkey/releases), unzip, drag to `/Applications/`.
-
-### Build from source
-```bash
-git clone https://github.com/norequests/telegram-voice-hotkey.git
-cd telegram-voice-hotkey
-./build.sh
-cp -r TelegramVoiceHotkey.app /Applications/
-```
-
-First build takes ~5 minutes (compiles TDLib from source). Subsequent builds are fast.
-
-**Build dependencies** (installed automatically via Homebrew):
-- cmake, gperf, openssl (for TDLib compilation)
-- ffmpeg (for OGG/Opus conversion)
-
-## Setup
-
-On first launch, a setup window appears:
-
-### Bot API mode
-- **Bot Token** — from [@BotFather](https://t.me/BotFather)
-- **Chat ID** — the chat to send voice notes to
-
-### User API mode (send as yourself)
-- **API ID & Hash** — from [my.telegram.org](https://my.telegram.org) → API Development Tools
-- **Phone number** — your Telegram phone number
-- **Verification code** — sent to your Telegram app (one-time login)
-- **Chat ID** — the chat to send voice notes to
-
-Then set your **hotkey** (click the button, press your combo) and **recording mode**.
-
-## Permissions
-
-The app needs two macOS permissions:
-- **Microphone** — auto-prompts on first use
-- **Accessibility** — required for global hotkey capture. Grant in:
-  System Settings → Privacy & Security → Accessibility
-
-After granting Accessibility, the app auto-detects it (no restart needed).
-
-## How to get your Chat ID
-
-1. Message your bot on Telegram
-2. Visit: `https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates`
-3. Find `"chat":{"id":123456789}`
-
-## Config & Logs
-
-- Config: `~/Library/Application Support/TelegramVoiceHotkey/config.json`
-- Logs: `~/Library/Application Support/TelegramVoiceHotkey/app.log`
-- TDLib data: `~/Library/Application Support/TelegramVoiceHotkey/tdlib/`
+| Path | Description |
+|------|-------------|
+| `~/Library/Application Support/TelegramVoiceHotkey/config.json` | Settings |
+| `~/Library/Application Support/TelegramVoiceHotkey/app.log` | App log |
+| `~/Library/Application Support/TelegramVoiceHotkey/tdlib/` | Telegram session data |
+| `~/Library/Application Support/TelegramVoiceHotkey/tdlib.log` | TDLib internal log |
 
 Click the menu bar icon → **View Log...** to check status.
 
-## Requirements
+## Troubleshooting
 
-- macOS 13+ (Ventura or later)
-- Apple Silicon or Intel
+| Problem | Fix |
+|---------|-----|
+| "TDLib not found" | Run `./scripts/setup-tdlib.sh` then rebuild |
+| Hotkey doesn't work | Check Accessibility permission in System Settings |
+| "Chat not found" | Make sure Chat ID is numeric, not a username |
+| App won't open | Right-click → Open, or allow in Privacy & Security |
+| Corrupt session | Delete `~/Library/Application Support/TelegramVoiceHotkey/tdlib/` and re-login |
+
+## macOS only
+
+This is a native Swift/AppKit app. Windows and Linux are not supported. PRs welcome.
 
 ## License
 

@@ -33,7 +33,11 @@ struct Config: Codable {
         self.userLoggedIn = userLoggedIn
     }
 
-    // Handle old configs missing new fields
+    enum CodingKeys: String, CodingKey {
+        case botToken, chatId, hotkeyKeyCode, hotkeyModifiers, hotkeyDisplay
+        case recordingMode, launchAtLogin, sendMode, apiId, apiHash, userLoggedIn
+    }
+
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         botToken = try c.decode(String.self, forKey: .botToken)

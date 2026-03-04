@@ -10,6 +10,7 @@ class SetupWindowController: NSWindowController, NSWindowDelegate {
     private let screenshotHotkeyField = HotkeyRecorderView(frame: .zero)
     private let modePopup = NSPopUpButton()
     private let launchAtLoginCheck = NSButton(checkboxWithTitle: "Launch at login", target: nil, action: nil)
+    private var loginRowY: Int = 0
 
     // User API fields
     private let apiIdField = NSTextField()
@@ -24,7 +25,7 @@ class SetupWindowController: NSWindowController, NSWindowDelegate {
 
     convenience init(existing: Config, existingClient: TelegramClient? = nil, onComplete: @escaping (Config) -> Void) {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 440),
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 500),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -55,7 +56,7 @@ class SetupWindowController: NSWindowController, NSWindowDelegate {
         contentView = NSView(frame: window.contentView!.bounds)
         contentView.autoresizingMask = [.width, .height]
 
-        var y = 405
+        var y = 465
 
         // ── Telegram API Credentials ──
         let credHeader = makeLabel("Telegram API", bold: true, size: 14)
@@ -108,20 +109,11 @@ class SetupWindowController: NSWindowController, NSWindowDelegate {
             loginButton.action = #selector(startReauth)
             contentView.addSubview(loginButton)
 
-            // Pre-position phone/code fields (hidden) so Re-auth can reveal them
-            phoneField.frame = NSRect(x: 115, y: y - 30, width: 200, height: 24)
-            phoneField.placeholderString = "+1234567890"
-            phoneField.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-            phoneField.isHidden = true
-            contentView.addSubview(phoneField)
+            // Store the login row Y so Re-auth can position phone/code fields here
+            loginRowY = y
 
-            codeField.frame = NSRect(x: 115, y: y - 60, width: 200, height: 24)
-            codeField.placeholderString = "12345"
-            codeField.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-            codeField.isHidden = true
-            contentView.addSubview(codeField)
-
-            y -= 35
+            // Reserve space for phone/code fields (shown on Re-auth)
+            y -= 95
         } else {
             let phoneLabel = makeLabel("Phone:")
             phoneLabel.frame = NSRect(x: 20, y: y, width: 90, height: 20)
@@ -256,11 +248,31 @@ class SetupWindowController: NSWindowController, NSWindowDelegate {
             self.existingConfig.save()
 
             self.loginStatus.stringValue = "Enter phone to re-authenticate"
+            self.loginStatus.textColor = .secondaryLabelColor
             self.loginButton.title = "Send Code"
             self.loginButton.action = #selector(self.handleLogin)
             self.loginButton.isEnabled = true
+
+            // Add phone/code fields below login status
+            let y = self.loginRowY - 30
+            if self.phoneField.superview == nil {
+                self.phoneField.frame = NSRect(x: 115, y: y, width: 200, height: 24)
+                self.phoneField.placeholderString = "+1234567890"
+                self.phoneField.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+                self.window?.contentView?.addSubview(self.phoneField)
+            }
+            self.phoneField.frame = NSRect(x: 115, y: y, width: 200, height: 24)
             self.phoneField.isHidden = false
+
+            if self.codeField.superview == nil {
+                self.codeField.frame = NSRect(x: 115, y: y - 30, width: 200, height: 24)
+                self.codeField.placeholderString = "12345"
+                self.codeField.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+                self.window?.contentView?.addSubview(self.codeField)
+            }
+            self.codeField.frame = NSRect(x: 115, y: y - 30, width: 200, height: 24)
             self.codeField.isHidden = false
+
             self.telegramClient = nil
         }
 

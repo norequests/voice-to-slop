@@ -242,21 +242,36 @@ class SetupWindowController: NSWindowController, NSWindowDelegate {
     }
 
     @objc func startReauth() {
-        let tdlibDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("TelegramVoiceHotkey/tdlib")
-        try? FileManager.default.removeItem(at: tdlibDir)
-
-        existingConfig.userLoggedIn = false
-        existingConfig.save()
-
-        loginStatus.stringValue = "Enter phone to re-authenticate"
+        loginStatus.stringValue = "Closing existing session..."
         loginStatus.textColor = .secondaryLabelColor
-        loginButton.title = "Send Code"
-        loginButton.action = #selector(handleLogin)
-        loginButton.isEnabled = true
-        phoneField.isHidden = false
-        codeField.isHidden = false
-        telegramClient = nil
+        loginButton.isEnabled = false
+
+        let finishReauth = { [weak self] in
+            guard let self = self else { return }
+            let tdlibDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+                .appendingPathComponent("TelegramVoiceHotkey/tdlib")
+            try? FileManager.default.removeItem(at: tdlibDir)
+
+            self.existingConfig.userLoggedIn = false
+            self.existingConfig.save()
+
+            self.loginStatus.stringValue = "Enter phone to re-authenticate"
+            self.loginButton.title = "Send Code"
+            self.loginButton.action = #selector(self.handleLogin)
+            self.loginButton.isEnabled = true
+            self.phoneField.isHidden = false
+            self.codeField.isHidden = false
+            self.telegramClient = nil
+        }
+
+        // Close existing TDLib client first to release database lock
+        if let client = telegramClient {
+            client.close { finishReauth() }
+        } else if let appDelegate = NSApp.delegate as? AppDelegate, let client = appDelegate.telegramClient {
+            client.close { finishReauth() }
+        } else {
+            finishReauth()
+        }
     }
 
     @objc func handleLogin() {
@@ -277,7 +292,8 @@ class SetupWindowController: NSWindowController, NSWindowDelegate {
             return
         }
 
-        if telegramClient == nil {
+        let isNewClient = (telegramClient == nil)
+        if isNewClient {
             telegramClient = TelegramClient(apiId: apiId, apiHash: apiHash)
             telegramClient?.start()
         }
@@ -300,10 +316,35 @@ class SetupWindowController: NSWindowController, NSWindowDelegate {
             loginButton.title = "Verifying..."
             loginButton.isEnabled = false
         } else if !phone.isEmpty {
-            telegramClient?.sendPhoneNumber(phone)
-            loginButton.title = "Verify Code"
-            loginStatus.stringValue = "📱 Code sent to Telegram"
-            loginStatus.textColor = .systemOrange
+            if isNewClient {
+                // TDLib hasn't reached waitingForPhoneNumber yet — queue it
+                loginButton.title = "Connecting..."
+                loginButton.isEnabled = false
+                loginStatus.stringValue = "Initializing TDLib..."
+                loginStatus.textColor = .secondaryLabelColor
+                telegramClient?.onAuthStateChanged = { [weak self] state in
+                    DispatchQueue.main.async {
+                        guard let self = self else { return }
+                        if state == .waitingForPhone {
+                            // NOW send the phone number
+                            self.telegramClient?.sendPhoneNumber(phone)
+                            self.loginButton.title = "Verify Code"
+                            self.loginStatus.stringValue = "Sending phone number..."
+                            self.loginStatus.textColor = .secondaryLabelColor
+                            // Restore normal callback
+                            self.telegramClient?.onAuthStateChanged = { [weak self] s in
+                                DispatchQueue.main.async { self?.handleAuthState(s) }
+                            }
+                        }
+                        self.handleAuthState(state)
+                    }
+                }
+            } else {
+                telegramClient?.sendPhoneNumber(phone)
+                loginButton.title = "Verify Code"
+                loginStatus.stringValue = "📱 Code sent to Telegram"
+                loginStatus.textColor = .systemOrange
+            }
         } else {
             showAlert("Enter your phone number")
         }

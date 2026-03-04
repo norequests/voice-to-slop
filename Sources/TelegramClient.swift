@@ -244,6 +244,33 @@ class TelegramClient {
 
     var isLoggedIn: Bool { authState == .ready }
 
+    /// Gracefully close TDLib — releases database lock
+    func close(completion: (() -> Void)? = nil) {
+        guard running else { completion?(); return }
+        running = false
+        log("🔒 Closing TDLib client \(clientId)...")
+
+        // Register callback for authorizationStateClosed
+        let extra = "close_\(clientId)"
+        pendingCallbacks[extra] = { [weak self] _ in
+            if let self = self {
+                TelegramClient.clients.removeValue(forKey: self.clientId)
+            }
+            log("🔒 TDLib client closed")
+            DispatchQueue.main.async { completion?() }
+        }
+
+        send(["@type": "close", "@extra": extra])
+
+        // Fallback: if close doesn't respond in 3s, force cleanup
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
+            if let self = self {
+                TelegramClient.clients.removeValue(forKey: self.clientId)
+            }
+            completion?()
+        }
+    }
+
     // MARK: - Client Registry (for shared receive loop)
 
     private static var clients: [Int32: TelegramClient] = [:]

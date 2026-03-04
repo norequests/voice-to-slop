@@ -94,7 +94,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let tapStatus = eventTap != nil ? "✅ Hotkey: Active" : "❌ Hotkey: Inactive"
             menu.addItem(NSMenuItem(title: tapStatus, action: nil, keyEquivalent: ""))
 
-            let tdlibStatus = telegramClient?.isLoggedIn == true ? "✅ Telegram: Connected" : "❌ Telegram: Not connected"
+            let tdlibConnected = telegramClient?.isLoggedIn == true
+            let tdlibStatus = tdlibConnected ? "✅ Telegram: Connected" : "⏳ Telegram: Connecting..."
             menu.addItem(NSMenuItem(title: tdlibStatus, action: nil, keyEquivalent: ""))
 
             if !AXIsProcessTrusted() || eventTap == nil {
@@ -272,9 +273,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         telegramClient = TelegramClient(apiId: config.apiId, apiHash: config.apiHash)
         telegramClient?.onAuthStateChanged = { [weak self] state in
             DispatchQueue.main.async {
+                log("📋 TDLib auth state changed: \(state)")
                 if state == .ready {
                     log("✅ TDLib: User authenticated and ready")
                     self?.config.userLoggedIn = true
+                    self?.config.save()
+                    self?.buildMenu()
+                } else if state == .waitingForPhone {
+                    log("⚠️ TDLib session expired — needs re-auth")
+                    self?.config.userLoggedIn = false
                     self?.config.save()
                     self?.buildMenu()
                 }

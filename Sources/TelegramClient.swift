@@ -203,6 +203,7 @@ class TelegramClient {
             if type == "chat", let cid = response["id"] as? Int64 {
                 tdChatId = cid
             }
+            log("📸 sendPhoto: createPrivateChat returned \(type), using chatId=\(tdChatId)")
 
             var content: [String: Any] = [
                 "@type": "inputMessagePhoto",
@@ -218,6 +219,7 @@ class TelegramClient {
                 ]
             }
 
+            log("📸 sendPhoto: sending message with photo at \(photoPath)")
             self.send([
                 "@type": "sendMessage",
                 "@extra": sendExtra,
@@ -229,6 +231,11 @@ class TelegramClient {
         pendingCallbacks[sendExtra] = { response in
             let type = response["@type"] as? String ?? ""
             let ok = type == "message"
+            if !ok {
+                log("❌ sendPhoto failed: \(type) — \(response)")
+            } else {
+                log("✅ sendPhoto: TDLib accepted message")
+            }
             DispatchQueue.main.async { completion(ok) }
         }
 

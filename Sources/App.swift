@@ -573,15 +573,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             log("📸 Sending screenshot + caption: \(caption.prefix(80))...")
 
             client.sendPhoto(chatId: chatId, photoPath: ssPath, caption: caption) { sent in
-                try? FileManager.default.removeItem(atPath: ssPath)
-                try? FileManager.default.removeItem(at: audioURL)
                 log(sent ? "✅ Sent screenshot + voice" : "❌ Send failed")
+                // Delay cleanup — TDLib needs the file for upload
+                DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) {
+                    try? FileManager.default.removeItem(atPath: ssPath)
+                }
             }
 
             // Also send the voice note as a reply for the AI to hear the original audio
             let oggURL = audioURL.deletingPathExtension().appendingPathExtension("ogg")
             self.convertToOgg(input: audioURL, output: oggURL) { _ in
-                // Voice note sent separately so OpenClaw gets both
+                // Delay cleanup — TDLib needs file for upload
+                DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) {
+                    try? FileManager.default.removeItem(at: audioURL)
+                    try? FileManager.default.removeItem(at: oggURL)
+                }
             }
         }
     }

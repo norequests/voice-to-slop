@@ -38,8 +38,10 @@ jobs:
 
           cp .build/release/TelegramVoiceHotkey "$APP/Contents/MacOS/"
 
-          # Bundle TDLib
-          cp tdlib-local/lib/libtdjson.dylib "$APP/Contents/Resources/lib/"
+          # Bundle TDLib (resolve symlinks)
+          for f in tdlib-local/lib/libtdjson*.dylib; do
+            cp -L "$f" "$APP/Contents/Resources/lib/"
+          done
           install_name_tool -add_rpath "@executable_path/../Resources/lib" "$APP/Contents/MacOS/TelegramVoiceHotkey" 2>/dev/null || true
 
           # Bundle ffmpeg

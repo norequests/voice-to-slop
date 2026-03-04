@@ -17,7 +17,7 @@ Hold a hotkey → record → release → voice note sent as **you** via Telegram
 
 > **Note:** The app is not notarized. macOS may say it's "damaged." Fix with:
 > ```bash
-> xattr -cr /Applications/TelegramVoiceHotkey.app
+> sudo xattr -cr /Applications/TelegramVoiceHotkey.app
 > ```
 > Or right-click → Open the first time.
 

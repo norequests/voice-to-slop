@@ -116,14 +116,17 @@ struct Config: Codable {
 
     static let `default` = Config(
         chatId: "",
-        hotkeyKeyCode: 0x60,
-        hotkeyModifiers: 0,
-        hotkeyDisplay: "F5",
+        hotkeyKeyCode: 0x2D,       // N
+        hotkeyModifiers: 786432,    // ⌃⌥ (Control + Option)
+        hotkeyDisplay: "⌃⌥N",
         recordingMode: .holdToRecord,
         launchAtLogin: false,
         apiId: 0,
         apiHash: "",
-        userLoggedIn: false
+        userLoggedIn: false,
+        screenshotHotkeyKeyCode: 0x2E,    // M
+        screenshotHotkeyModifiers: 786432, // ⌃⌥
+        screenshotHotkeyDisplay: "⌃⌥M"
     )
 
     static func load() -> Config {

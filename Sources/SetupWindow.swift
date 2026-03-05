@@ -39,7 +39,7 @@ class SetupWindowController: NSWindowController, NSWindowDelegate {
 
     convenience init(existing: Config, existingClient: TelegramClient? = nil, onComplete: @escaping (Config) -> Void) {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 570),
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 700),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -70,7 +70,7 @@ class SetupWindowController: NSWindowController, NSWindowDelegate {
         contentView = NSView(frame: window.contentView!.bounds)
         contentView.autoresizingMask = [.width, .height]
 
-        var y = 535
+        var y = 665
 
         // ── Telegram API Credentials ──
         let credHeader = makeLabel("Telegram API", bold: true, size: 14)

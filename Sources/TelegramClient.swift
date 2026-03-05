@@ -195,6 +195,31 @@ class TelegramClient {
         }
     }
 
+    func sendTextMessage(chatId: Int64, text: String, completion: @escaping (Bool) -> Void) {
+        ensureChat(userId: chatId) { [weak self] tdChatId in
+            guard let self = self, let tdChatId = tdChatId else {
+                DispatchQueue.main.async { completion(false) }
+                return
+            }
+            let extra = UUID().uuidString
+            self.setCallback(extra: extra) { response in
+                let ok = jsonString(response["@type"]) == "message"
+                if !ok { log("❌ sendTextMessage failed: \(jsonString(response["@type"]) ?? "?") — \(jsonString(response["message"]) ?? "")") }
+                else { log("✅ sendTextMessage accepted") }
+                DispatchQueue.main.async { completion(ok) }
+            }
+            self.tdSend([
+                "@type": "sendMessage",
+                "@extra": extra,
+                "chat_id": tdChatId,
+                "input_message_content": [
+                    "@type": "inputMessageText",
+                    "text": ["@type": "formattedText", "text": text],
+                ],
+            ])
+        }
+    }
+
     func sendPhoto(chatId: Int64, photoPath: String, caption: String?, completion: @escaping (Bool) -> Void) {
         ensureChat(userId: chatId) { [weak self] tdChatId in
             guard let self = self, let tdChatId = tdChatId else {

@@ -20,15 +20,23 @@ struct Config: Codable {
     var screenshotHotkeyModifiers: UInt
     var screenshotHotkeyDisplay: String
     // Transcription
-    var transcriptionMode: String  // "local" or "gemini"
+    var transcriptionMode: String  // "local", "gemini", or "custom"
     var geminiApiKey: String
+    // Custom transcription endpoint (OpenAI-compatible)
+    var customEndpointUrl: String
+    var customApiKey: String
+    var customModelName: String
+    // Voice send behaviour
+    var sendVoiceAsText: Bool  // true = transcribe → send text; false = send raw voice note
 
     init(chatId: String, hotkeyKeyCode: UInt16, hotkeyModifiers: UInt,
          hotkeyDisplay: String, recordingMode: RecordingMode, launchAtLogin: Bool,
          apiId: Int, apiHash: String, userLoggedIn: Bool,
          screenshotHotkeyKeyCode: UInt16 = 0, screenshotHotkeyModifiers: UInt = 0,
          screenshotHotkeyDisplay: String = "",
-         transcriptionMode: String = "local", geminiApiKey: String = "") {
+         transcriptionMode: String = "local", geminiApiKey: String = "",
+         customEndpointUrl: String = "", customApiKey: String = "",
+         customModelName: String = "", sendVoiceAsText: Bool = false) {
         self.chatId = chatId; self.hotkeyKeyCode = hotkeyKeyCode
         self.hotkeyModifiers = hotkeyModifiers; self.hotkeyDisplay = hotkeyDisplay
         self.recordingMode = recordingMode; self.launchAtLogin = launchAtLogin
@@ -38,6 +46,10 @@ struct Config: Codable {
         self.screenshotHotkeyDisplay = screenshotHotkeyDisplay
         self.transcriptionMode = transcriptionMode
         self.geminiApiKey = geminiApiKey
+        self.customEndpointUrl = customEndpointUrl
+        self.customApiKey = customApiKey
+        self.customModelName = customModelName
+        self.sendVoiceAsText = sendVoiceAsText
     }
 
     enum CodingKeys: String, CodingKey {
@@ -45,6 +57,8 @@ struct Config: Codable {
         case recordingMode, launchAtLogin, apiId, apiHash, userLoggedIn
         case screenshotHotkeyKeyCode, screenshotHotkeyModifiers, screenshotHotkeyDisplay
         case transcriptionMode, geminiApiKey
+        case customEndpointUrl, customApiKey, customModelName
+        case sendVoiceAsText
         // Legacy keys we skip on read
         case botToken, sendMode
     }
@@ -65,6 +79,10 @@ struct Config: Codable {
         screenshotHotkeyDisplay = try c.decodeIfPresent(String.self, forKey: .screenshotHotkeyDisplay) ?? ""
         transcriptionMode = try c.decodeIfPresent(String.self, forKey: .transcriptionMode) ?? "local"
         geminiApiKey = try c.decodeIfPresent(String.self, forKey: .geminiApiKey) ?? ""
+        customEndpointUrl = try c.decodeIfPresent(String.self, forKey: .customEndpointUrl) ?? ""
+        customApiKey = try c.decodeIfPresent(String.self, forKey: .customApiKey) ?? ""
+        customModelName = try c.decodeIfPresent(String.self, forKey: .customModelName) ?? ""
+        sendVoiceAsText = try c.decodeIfPresent(Bool.self, forKey: .sendVoiceAsText) ?? false
     }
 
     func encode(to encoder: Encoder) throws {
@@ -83,6 +101,10 @@ struct Config: Codable {
         try c.encode(screenshotHotkeyDisplay, forKey: .screenshotHotkeyDisplay)
         try c.encode(transcriptionMode, forKey: .transcriptionMode)
         try c.encode(geminiApiKey, forKey: .geminiApiKey)
+        try c.encode(customEndpointUrl, forKey: .customEndpointUrl)
+        try c.encode(customApiKey, forKey: .customApiKey)
+        try c.encode(customModelName, forKey: .customModelName)
+        try c.encode(sendVoiceAsText, forKey: .sendVoiceAsText)
     }
 
     static let configURL: URL = {

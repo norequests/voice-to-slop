@@ -12,6 +12,15 @@ class SetupWindowController: NSWindowController, NSWindowDelegate {
     private let transcriptionPopup = NSPopUpButton()
     private let geminiKeyField = NSTextField()
     private var geminiLabel: NSTextField?
+    // Custom endpoint fields
+    private let customEndpointField = NSTextField()
+    private let customApiKeyField = NSTextField()
+    private let customModelField = NSTextField()
+    private var customEndpointLabel: NSTextField?
+    private var customApiKeyLabel: NSTextField?
+    private var customModelLabel: NSTextField?
+    // Send-as-text checkbox
+    private let sendAsTextCheck = NSButton(checkboxWithTitle: "Send voice as transcribed text (not audio)", target: nil, action: nil)
     private let downloadModelButton = NSButton(title: "Download Model (~460MB)", target: nil, action: nil)
     private let modelStatusLabel = NSTextField(labelWithString: "")
     private let launchAtLoginCheck = NSButton(checkboxWithTitle: "Launch at login", target: nil, action: nil)
@@ -232,14 +241,22 @@ class SetupWindowController: NSWindowController, NSWindowDelegate {
         transcriptionPopup.frame = NSRect(x: 115, y: y - 2, width: 385, height: 24)
         transcriptionPopup.addItems(withTitles: [
             "Local (whisper.cpp — offline, ~10s)",
-            "Gemini (cloud — fast, needs API key)"
+            "Gemini (cloud — fast, needs API key)",
+            "Custom endpoint (OpenAI-compatible)"
         ])
-        transcriptionPopup.selectItem(at: existing.transcriptionMode == "gemini" ? 1 : 0)
+        let modeIndex: Int
+        switch existing.transcriptionMode {
+        case "gemini": modeIndex = 1
+        case "custom": modeIndex = 2
+        default:       modeIndex = 0
+        }
+        transcriptionPopup.selectItem(at: modeIndex)
         transcriptionPopup.target = self
         transcriptionPopup.action = #selector(transcriptionModeChanged)
         contentView.addSubview(transcriptionPopup)
         y -= 30
 
+        // ── Gemini key ──
         let geminiLabel_ = makeLabel("Gemini Key:")
         self.geminiLabel = geminiLabel_
         let geminiLabel = geminiLabel_
@@ -256,7 +273,53 @@ class SetupWindowController: NSWindowController, NSWindowDelegate {
         contentView.addSubview(geminiKeyField)
         geminiLabel.isHidden = existing.transcriptionMode != "gemini"
 
-        // Download model button (for local mode)
+        // ── Custom endpoint fields ──
+        let customEndpointLabel_ = makeLabel("Endpoint URL:")
+        self.customEndpointLabel = customEndpointLabel_
+        customEndpointLabel_.frame = NSRect(x: 20, y: y, width: 90, height: 20)
+        contentView.addSubview(customEndpointLabel_)
+
+        customEndpointField.frame = NSRect(x: 115, y: y - 2, width: 385, height: 24)
+        customEndpointField.placeholderString = "https://api.openai.com  (or your whisper server)"
+        customEndpointField.stringValue = existing.customEndpointUrl
+        customEndpointField.usesSingleLineMode = true
+        customEndpointField.cell?.isScrollable = true
+        customEndpointField.isHidden = existing.transcriptionMode != "custom"
+        contentView.addSubview(customEndpointField)
+        customEndpointLabel_.isHidden = existing.transcriptionMode != "custom"
+        y -= 30
+
+        let customApiKeyLabel_ = makeLabel("API Key:")
+        self.customApiKeyLabel = customApiKeyLabel_
+        customApiKeyLabel_.frame = NSRect(x: 20, y: y, width: 90, height: 20)
+        contentView.addSubview(customApiKeyLabel_)
+
+        customApiKeyField.frame = NSRect(x: 115, y: y - 2, width: 385, height: 24)
+        customApiKeyField.placeholderString = "sk-... (leave blank for no auth)"
+        customApiKeyField.stringValue = existing.customApiKey
+        customApiKeyField.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        customApiKeyField.usesSingleLineMode = true
+        customApiKeyField.cell?.isScrollable = true
+        customApiKeyField.isHidden = existing.transcriptionMode != "custom"
+        contentView.addSubview(customApiKeyField)
+        customApiKeyLabel_.isHidden = existing.transcriptionMode != "custom"
+        y -= 30
+
+        let customModelLabel_ = makeLabel("Model:")
+        self.customModelLabel = customModelLabel_
+        customModelLabel_.frame = NSRect(x: 20, y: y, width: 90, height: 20)
+        contentView.addSubview(customModelLabel_)
+
+        customModelField.frame = NSRect(x: 115, y: y - 2, width: 385, height: 24)
+        customModelField.placeholderString = "whisper-1 (default)"
+        customModelField.stringValue = existing.customModelName
+        customModelField.usesSingleLineMode = true
+        customModelField.cell?.isScrollable = true
+        customModelField.isHidden = existing.transcriptionMode != "custom"
+        contentView.addSubview(customModelField)
+        customModelLabel_.isHidden = existing.transcriptionMode != "custom"
+
+        // ── Download model button (for local mode) ──
         downloadModelButton.frame = NSRect(x: 115, y: y - 2, width: 200, height: 24)
         downloadModelButton.bezelStyle = .rounded
         downloadModelButton.target = self
@@ -269,6 +332,13 @@ class SetupWindowController: NSWindowController, NSWindowDelegate {
         contentView.addSubview(modelStatusLabel)
 
         updateTranscriptionUI(mode: existing.transcriptionMode)
+        y -= 30
+
+        // ── Send-as-text option ──
+        sendAsTextCheck.frame = NSRect(x: 115, y: y, width: 385, height: 20)
+        sendAsTextCheck.state = existing.sendVoiceAsText ? .on : .off
+        sendAsTextCheck.toolTip = "When enabled, voice recordings are transcribed and sent as text messages instead of voice notes."
+        contentView.addSubview(sendAsTextCheck)
         y -= 30
 
         launchAtLoginCheck.frame = NSRect(x: 115, y: y, width: 380, height: 20)
@@ -286,22 +356,35 @@ class SetupWindowController: NSWindowController, NSWindowDelegate {
     }
 
     @objc func transcriptionModeChanged() {
-        let mode = transcriptionPopup.indexOfSelectedItem == 1 ? "gemini" : "local"
+        let mode: String
+        switch transcriptionPopup.indexOfSelectedItem {
+        case 1:  mode = "gemini"
+        case 2:  mode = "custom"
+        default: mode = "local"
+        }
         updateTranscriptionUI(mode: mode)
     }
 
     private func updateTranscriptionUI(mode: String) {
         let isGemini = mode == "gemini"
-        geminiKeyField.isHidden = !isGemini
-        geminiLabel?.isHidden = !isGemini
+        let isCustom = mode == "custom"
+        let isLocal  = mode == "local"
 
-        if isGemini {
-            downloadModelButton.isHidden = true
-            modelStatusLabel.isHidden = true
-        } else {
+        geminiKeyField.isHidden   = !isGemini
+        geminiLabel?.isHidden     = !isGemini
+
+        customEndpointField.isHidden   = !isCustom
+        customApiKeyField.isHidden     = !isCustom
+        customModelField.isHidden      = !isCustom
+        customEndpointLabel?.isHidden  = !isCustom
+        customApiKeyLabel?.isHidden    = !isCustom
+        customModelLabel?.isHidden     = !isCustom
+
+        downloadModelButton.isHidden = !isLocal || whisperModelExists()
+        modelStatusLabel.isHidden    = !isLocal
+        if isLocal {
             let hasModel = whisperModelExists()
             downloadModelButton.isHidden = hasModel
-            modelStatusLabel.isHidden = false
             if hasModel {
                 let modelName = whisperModelName()
                 modelStatusLabel.stringValue = "✅ \(modelName) installed"
@@ -601,8 +684,18 @@ class SetupWindowController: NSWindowController, NSWindowDelegate {
             screenshotHotkeyKeyCode: screenshotHotkeyField.recordedHotkey?.keyCode ?? 0,
             screenshotHotkeyModifiers: screenshotHotkeyField.recordedHotkey?.modifiers ?? 0,
             screenshotHotkeyDisplay: screenshotHotkeyField.recordedHotkey?.displayString ?? "",
-            transcriptionMode: transcriptionPopup.indexOfSelectedItem == 1 ? "gemini" : "local",
-            geminiApiKey: geminiKeyField.stringValue.trimmingCharacters(in: .whitespaces)
+            transcriptionMode: {
+                switch transcriptionPopup.indexOfSelectedItem {
+                case 1:  return "gemini"
+                case 2:  return "custom"
+                default: return "local"
+                }
+            }(),
+            geminiApiKey: geminiKeyField.stringValue.trimmingCharacters(in: .whitespaces),
+            customEndpointUrl: customEndpointField.stringValue.trimmingCharacters(in: .whitespaces),
+            customApiKey: customApiKeyField.stringValue.trimmingCharacters(in: .whitespaces),
+            customModelName: customModelField.stringValue.trimmingCharacters(in: .whitespaces),
+            sendVoiceAsText: sendAsTextCheck.state == .on
         )
         config.save()
         onComplete?(config)

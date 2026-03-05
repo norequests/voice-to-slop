@@ -620,9 +620,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let sendURL = success ? oggURL : url
             let chatId = Int64(self.config.chatId) ?? 0
             client.sendVoiceNote(chatId: chatId, filePath: sendURL.path, duration: Int(duration)) { sent in
-                try? FileManager.default.removeItem(at: url)
-                try? FileManager.default.removeItem(at: oggURL)
                 log(sent ? "✅ Sent voice note" : "❌ Send failed")
+                // Delay cleanup — TDLib needs the file for upload
+                DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) {
+                    try? FileManager.default.removeItem(at: url)
+                    try? FileManager.default.removeItem(at: oggURL)
+                }
             }
         }
     }

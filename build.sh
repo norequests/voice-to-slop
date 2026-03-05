@@ -70,9 +70,9 @@ cat > "$APP/Contents/Info.plist" << 'EOF'
     <key>CFBundleDisplayName</key>
     <string>Voice to Slop</string>
     <key>CFBundleVersion</key>
-    <string>1.3.0</string>
+    <string>1.3.1</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.3.0</string>
+    <string>1.3.1</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>CFBundlePackageType</key>

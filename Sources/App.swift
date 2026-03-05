@@ -487,6 +487,41 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    // MARK: - Transcription helper
+
+    /// Returns a closure that transcribes `audioPath` using the current config.
+    func makeTranscribeClosure(audioPath: String) -> (@escaping (String?) -> Void) -> Void {
+        switch config.transcriptionMode {
+        case "gemini":
+            guard !config.geminiApiKey.isEmpty else {
+                log("⚠️ Gemini mode selected but no API key — falling back to local")
+                return { completion in WhisperTranscriber.transcribe(audioPath: audioPath, completion: completion) }
+            }
+            log("📝 Transcribing via Gemini...")
+            return { completion in
+                GeminiTranscriber.transcribe(audioPath: audioPath, apiKey: self.config.geminiApiKey, completion: completion)
+            }
+        case "custom":
+            guard !config.customEndpointUrl.isEmpty else {
+                log("⚠️ Custom mode selected but no endpoint URL — falling back to local")
+                return { completion in WhisperTranscriber.transcribe(audioPath: audioPath, completion: completion) }
+            }
+            log("📝 Transcribing via custom endpoint (\(config.customEndpointUrl))...")
+            return { completion in
+                CustomTranscriber.transcribe(
+                    audioPath: audioPath,
+                    endpointUrl: self.config.customEndpointUrl,
+                    apiKey: self.config.customApiKey,
+                    modelName: self.config.customModelName,
+                    completion: completion
+                )
+            }
+        default:
+            log("📝 Transcribing locally via whisper...")
+            return { completion in WhisperTranscriber.transcribe(audioPath: audioPath, completion: completion) }
+        }
+    }
+
     func stopAndSendScreenshot() {
         guard isRecording, isScreenshotMode else { return }
         isRecording = false
@@ -536,18 +571,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         // Transcribe voice, then send screenshot with caption
-        let transcribe: (@escaping (String?) -> Void) -> Void
-        if config.transcriptionMode == "gemini" && !config.geminiApiKey.isEmpty {
-            log("📝 Transcribing via Gemini...")
-            transcribe = { completion in
-                GeminiTranscriber.transcribe(audioPath: audioURL.path, apiKey: self.config.geminiApiKey, completion: completion)
-            }
-        } else {
-            log("📝 Transcribing locally via whisper...")
-            transcribe = { completion in
-                WhisperTranscriber.transcribe(audioPath: audioURL.path, completion: completion)
-            }
-        }
+        let transcribe = makeTranscribeClosure(audioPath: audioURL.path)
         transcribe { [weak self] transcript in
             guard let self = self else { return }
 
@@ -615,16 +639,50 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
 
-        let oggURL = url.deletingPathExtension().appendingPathExtension("ogg")
-        convertToOgg(input: url, output: oggURL) { [self] success in
-            let sendURL = success ? oggURL : url
-            let chatId = Int64(self.config.chatId) ?? 0
-            client.sendVoiceNote(chatId: chatId, filePath: sendURL.path, duration: Int(duration)) { sent in
-                log(sent ? "✅ Sent voice note" : "❌ Send failed")
-                // Delay cleanup — TDLib needs the file for upload
-                DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) {
+        let chatId = Int64(config.chatId) ?? 0
+
+        // If sendVoiceAsText + a cloud transcription mode is configured, transcribe first
+        let shouldTranscribe = config.sendVoiceAsText && config.transcriptionMode != "local"
+        if shouldTranscribe {
+            log("📝 sendVoiceAsText=true — transcribing before send...")
+            let transcribe = makeTranscribeClosure(audioPath: url.path)
+            transcribe { [self] transcript in
+                // Cleanup temp audio regardless
+                DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
                     try? FileManager.default.removeItem(at: url)
-                    try? FileManager.default.removeItem(at: oggURL)
+                }
+                guard let text = transcript, !text.isEmpty else {
+                    log("⚠️ Transcription empty/failed — falling back to voice note")
+                    // fall back: convert + send voice
+                    let oggURL = url.deletingPathExtension().appendingPathExtension("ogg")
+                    self.convertToOgg(input: url, output: oggURL) { success in
+                        let sendURL = success ? oggURL : url
+                        client.sendVoiceNote(chatId: chatId, filePath: sendURL.path, duration: Int(duration)) { sent in
+                            log(sent ? "✅ Sent voice note (fallback)" : "❌ Send failed")
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) {
+                                try? FileManager.default.removeItem(at: url)
+                                try? FileManager.default.removeItem(at: oggURL)
+                            }
+                        }
+                    }
+                    return
+                }
+                log("📤 Sending transcript as text message...")
+                client.sendTextMessage(chatId: chatId, text: text) { sent in
+                    log(sent ? "✅ Sent transcript as text" : "❌ Text send failed")
+                }
+            }
+        } else {
+            let oggURL = url.deletingPathExtension().appendingPathExtension("ogg")
+            convertToOgg(input: url, output: oggURL) { [self] success in
+                let sendURL = success ? oggURL : url
+                client.sendVoiceNote(chatId: chatId, filePath: sendURL.path, duration: Int(duration)) { sent in
+                    log(sent ? "✅ Sent voice note" : "❌ Send failed")
+                    // Delay cleanup — TDLib needs the file for upload
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) {
+                        try? FileManager.default.removeItem(at: url)
+                        try? FileManager.default.removeItem(at: oggURL)
+                    }
                 }
             }
         }

@@ -40,7 +40,7 @@ class SetupWindowController: NSWindowController, NSWindowDelegate {
 
     convenience init(existing: Config, existingClient: TelegramClient? = nil, onComplete: @escaping (Config) -> Void) {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 700),
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 760),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -71,7 +71,7 @@ class SetupWindowController: NSWindowController, NSWindowDelegate {
         contentView = NSView(frame: window.contentView!.bounds)
         contentView.autoresizingMask = [.width, .height]
 
-        var y = 665
+        var y = 725
 
         // ── Telegram API Credentials ──
         let credHeader = makeLabel("Telegram API", bold: true, size: 14)
@@ -163,12 +163,6 @@ class SetupWindowController: NSWindowController, NSWindowDelegate {
         }
 
         // ── Chat ID ──
-        let divider1 = NSBox()
-        divider1.boxType = .separator
-        divider1.frame = NSRect(x: 20, y: y + 5, width: 480, height: 1)
-        contentView.addSubview(divider1)
-        y -= 5
-
         let chatLabel = makeLabel("Chat ID:")
         chatLabel.frame = NSRect(x: 20, y: y, width: 90, height: 20)
         contentView.addSubview(chatLabel)
@@ -180,7 +174,13 @@ class SetupWindowController: NSWindowController, NSWindowDelegate {
         chatIdField.usesSingleLineMode = true
         chatIdField.cell?.isScrollable = true
         contentView.addSubview(chatIdField)
-        y -= 35
+        y -= 42
+
+        // ── Hotkeys ──
+        let hotkeysHeader = makeLabel("Hotkeys", bold: true, size: 14)
+        hotkeysHeader.frame = NSRect(x: 20, y: y, width: 200, height: 20)
+        contentView.addSubview(hotkeysHeader)
+        y -= 26
 
         // ── Hotkey ──
         let hotkeyLabel = makeLabel("Hotkey:")
@@ -236,12 +236,20 @@ class SetupWindowController: NSWindowController, NSWindowDelegate {
         }
         contentView.addSubview(dictationHotkeyField)
 
-        let dictationHelp = makeLabel("Record voice and copy transcription to clipboard")
-        dictationHelp.frame = NSRect(x: 320, y: y - 2, width: 250, height: 16)
+        let dictationHelp = makeLabel("Hold to record, then copy transcript to clipboard")
+        dictationHelp.frame = NSRect(x: 320, y: y - 6, width: 180, height: 28)
         dictationHelp.font = .systemFont(ofSize: 10)
         dictationHelp.textColor = .secondaryLabelColor
+        dictationHelp.cell?.wraps = true
+        dictationHelp.cell?.usesSingleLineMode = false
         contentView.addSubview(dictationHelp)
-        y -= 35
+        y -= 42
+
+        // ── Transcription Mode ──
+        let transcriptionModeHeader = makeLabel("Transcription Mode", bold: true, size: 14)
+        transcriptionModeHeader.frame = NSRect(x: 20, y: y, width: 200, height: 20)
+        contentView.addSubview(transcriptionModeHeader)
+        y -= 26
 
         let modeLabel = makeLabel("Mode:")
         modeLabel.frame = NSRect(x: 20, y: y, width: 90, height: 20)
@@ -367,10 +375,11 @@ class SetupWindowController: NSWindowController, NSWindowDelegate {
         launchAtLoginCheck.frame = NSRect(x: 115, y: y, width: 380, height: 20)
         launchAtLoginCheck.state = existing.launchAtLogin ? .on : .off
         contentView.addSubview(launchAtLoginCheck)
+        y -= 38
 
         // Save button
         let saveButton = NSButton(title: "Save & Start", target: self, action: #selector(saveConfig))
-        saveButton.frame = NSRect(x: 380, y: 15, width: 120, height: 36)
+        saveButton.frame = NSRect(x: 380, y: y, width: 120, height: 36)
         saveButton.bezelStyle = .rounded
         saveButton.keyEquivalent = "\r"
         contentView.addSubview(saveButton)

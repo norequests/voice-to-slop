@@ -24,6 +24,9 @@ func log(_ message: String) {
 }
 
 class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+    private let telegramMessageLimit = 4096
+    private let finalChunkSuffix = " (end of message — reply now)"
+
     var statusItem: NSStatusItem!
     var recorder: AVAudioRecorder?
     var tempURL: URL?
@@ -638,6 +641,123 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    private func splitForTelegram(text: String) -> [String] {
+        let source = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !source.isEmpty else { return [] }
+        let chars = Array(source)
+        var totalParts = 1
+
+        for _ in 0..<8 {
+            var messages: [String] = []
+            var cursor = 0
+            var part = 1
+
+            while cursor < chars.count {
+                let prefix = "[\(part)/\(totalParts)] "
+                var available = telegramMessageLimit - prefix.count
+                guard available > 0 else { return [] }
+
+                let remaining = chars.count - cursor
+                var take = min(remaining, available)
+
+                if remaining <= available {
+                    let lastAvailable = available - finalChunkSuffix.count
+                    if lastAvailable > 0, remaining <= lastAvailable {
+                        take = remaining
+                    } else if lastAvailable > 0, remaining > lastAvailable {
+                        take = lastAvailable
+                    }
+                }
+
+                let body = String(chars[cursor..<(cursor + take)])
+                cursor += take
+                let isLast = cursor >= chars.count
+                let suffix = isLast ? finalChunkSuffix : ""
+                messages.append(prefix + body + suffix)
+                part += 1
+            }
+
+            let isValid = !messages.isEmpty && messages.allSatisfy { $0.count <= telegramMessageLimit }
+            if isValid && messages.count == totalParts {
+                return messages
+            }
+            totalParts = max(messages.count, totalParts + 1)
+        }
+
+        let fallbackPrefix = "[1/1] "
+        let fallbackLimit = max(1, telegramMessageLimit - fallbackPrefix.count - finalChunkSuffix.count)
+        var fallbackMessages: [String] = []
+        var start = 0
+        while start < chars.count {
+            let end = min(start + fallbackLimit, chars.count)
+            fallbackMessages.append(String(chars[start..<end]))
+            start = end
+        }
+        return fallbackMessages.enumerated().map { idx, chunk in
+            let prefix = "[\(idx + 1)/\(fallbackMessages.count)] "
+            let suffix = idx == fallbackMessages.count - 1 ? finalChunkSuffix : ""
+            return prefix + chunk + suffix
+        }
+    }
+
+    private func saveFailedTranscription(_ text: String) -> URL? {
+        let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("voice-to-slop-transcription-\(stamp).txt")
+        do {
+            try text.write(to: fileURL, atomically: true, encoding: .utf8)
+            log("💾 Saved unsent transcription to \(fileURL.path)")
+            return fileURL
+        } catch {
+            log("❌ Failed to save unsent transcription: \(error)")
+            return nil
+        }
+    }
+
+    private func sendTranscriptionText(chatId: Int64, text: String, client: TelegramClient) {
+        let parts = splitForTelegram(text: text)
+        guard !parts.isEmpty else {
+            log("⚠️ Empty transcription after trimming — nothing sent")
+            return
+        }
+
+        log("📤 Sending transcription in \(parts.count) part(s)")
+        sendChunk(parts: parts, at: 0, chatId: chatId, client: client) { [weak self] success in
+            guard let self = self else { return }
+            if success {
+                log("✅ Sent transcript as text (\(parts.count) part(s))")
+                return
+            }
+            let fileURL = self.saveFailedTranscription(text)
+            let body: String
+            if let fileURL = fileURL {
+                body = "Send failed. Transcription saved to \(fileURL.path)"
+            } else {
+                body = "Send failed and backup save failed. Check app log."
+            }
+            self.showLocalNotification(title: "Voice to Slop", subtitle: "Text send failed", body: body)
+        }
+    }
+
+    private func sendChunk(parts: [String], at index: Int, chatId: Int64, client: TelegramClient, completion: @escaping (Bool) -> Void) {
+        if index >= parts.count {
+            completion(true)
+            return
+        }
+        client.sendTextMessage(chatId: chatId, text: parts[index]) { [weak self] sent in
+            guard let self = self else {
+                completion(false)
+                return
+            }
+            guard sent else {
+                log("❌ Failed sending transcript chunk \(index + 1)/\(parts.count)")
+                completion(false)
+                return
+            }
+            self.sendChunk(parts: parts, at: index + 1, chatId: chatId, client: client, completion: completion)
+        }
+    }
+
     func showLocalNotification(title: String, subtitle: String, body: String) {
         let postNotification = {
             let content = UNMutableNotificationContent()
@@ -808,9 +928,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     return
                 }
                 log("📤 Sending transcript as text message...")
-                client.sendTextMessage(chatId: chatId, text: text) { sent in
-                    log(sent ? "✅ Sent transcript as text" : "❌ Text send failed")
-                }
+                self.sendTranscriptionText(chatId: chatId, text: text, client: client)
             }
         } else {
             let oggURL = url.deletingPathExtension().appendingPathExtension("ogg")

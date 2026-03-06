@@ -166,7 +166,7 @@ class TelegramClient {
                     "system_language_code": "en",
                     "device_model": "macOS",
                     "system_version": "",
-                    "application_version": "1.2.0",
+                    "application_version": "1.4.0",
                 ])
             }
         }
@@ -425,7 +425,7 @@ class TelegramClient {
                 "system_language_code": "en",
                 "device_model": "macOS",
                 "system_version": "",
-                "application_version": "1.2.0",
+                "application_version": "1.4.0",
             ])
 
         case "authorizationStateWaitPhoneNumber":

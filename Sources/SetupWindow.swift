@@ -8,6 +8,7 @@ class SetupWindowController: NSWindowController, NSWindowDelegate {
     private let chatIdField = NSTextField()
     private let hotkeyField = HotkeyRecorderView(frame: .zero)
     private let screenshotHotkeyField = HotkeyRecorderView(frame: .zero)
+    private let dictationHotkeyField = HotkeyRecorderView(frame: .zero)
     private let modePopup = NSPopUpButton()
     private let transcriptionPopup = NSPopUpButton()
     private let geminiKeyField = NSTextField()
@@ -218,6 +219,28 @@ class SetupWindowController: NSWindowController, NSWindowDelegate {
         ssHelp.font = .systemFont(ofSize: 10)
         ssHelp.textColor = .secondaryLabelColor
         contentView.addSubview(ssHelp)
+        y -= 35
+
+        let dictationHotkeyLabel = makeLabel("Dictation:")
+        dictationHotkeyLabel.frame = NSRect(x: 20, y: y, width: 90, height: 20)
+        contentView.addSubview(dictationHotkeyLabel)
+
+        dictationHotkeyField.frame = NSRect(x: 115, y: y - 4, width: 200, height: 28)
+        if !existing.dictationDisplay.isEmpty {
+            dictationHotkeyField.title = existing.dictationDisplay
+            dictationHotkeyField.recordedHotkey = HotkeyRecorderView.RecordedHotkey(
+                keyCode: existing.dictationKeyCode,
+                modifiers: existing.dictationModifiers,
+                displayString: existing.dictationDisplay
+            )
+        }
+        contentView.addSubview(dictationHotkeyField)
+
+        let dictationHelp = makeLabel("Record voice and copy transcription to clipboard")
+        dictationHelp.frame = NSRect(x: 320, y: y - 2, width: 200, height: 16)
+        dictationHelp.font = .systemFont(ofSize: 10)
+        dictationHelp.textColor = .secondaryLabelColor
+        contentView.addSubview(dictationHelp)
         y -= 35
 
         let modeLabel = makeLabel("Mode:")
@@ -684,6 +707,9 @@ class SetupWindowController: NSWindowController, NSWindowDelegate {
             screenshotHotkeyKeyCode: screenshotHotkeyField.recordedHotkey?.keyCode ?? 0,
             screenshotHotkeyModifiers: screenshotHotkeyField.recordedHotkey?.modifiers ?? 0,
             screenshotHotkeyDisplay: screenshotHotkeyField.recordedHotkey?.displayString ?? "",
+            dictationKeyCode: dictationHotkeyField.recordedHotkey?.keyCode ?? 0x0B,
+            dictationModifiers: dictationHotkeyField.recordedHotkey?.modifiers ?? 786432,
+            dictationDisplay: dictationHotkeyField.recordedHotkey?.displayString ?? "⌃⌥B",
             transcriptionMode: {
                 switch transcriptionPopup.indexOfSelectedItem {
                 case 1:  return "gemini"

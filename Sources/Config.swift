@@ -19,6 +19,10 @@ struct Config: Codable {
     var screenshotHotkeyKeyCode: UInt16
     var screenshotHotkeyModifiers: UInt
     var screenshotHotkeyDisplay: String
+    // Dictation hotkey (voice -> clipboard)
+    var dictationKeyCode: UInt16
+    var dictationModifiers: UInt
+    var dictationDisplay: String
     // Transcription
     var transcriptionMode: String  // "local", "gemini", or "custom"
     var geminiApiKey: String
@@ -34,6 +38,8 @@ struct Config: Codable {
          apiId: Int, apiHash: String, userLoggedIn: Bool,
          screenshotHotkeyKeyCode: UInt16 = 0, screenshotHotkeyModifiers: UInt = 0,
          screenshotHotkeyDisplay: String = "",
+         dictationKeyCode: UInt16 = 0x0B, dictationModifiers: UInt = 786432,
+         dictationDisplay: String = "⌃⌥B",
          transcriptionMode: String = "local", geminiApiKey: String = "",
          customEndpointUrl: String = "", customApiKey: String = "",
          customModelName: String = "", sendVoiceAsText: Bool = false) {
@@ -44,6 +50,9 @@ struct Config: Codable {
         self.screenshotHotkeyKeyCode = screenshotHotkeyKeyCode
         self.screenshotHotkeyModifiers = screenshotHotkeyModifiers
         self.screenshotHotkeyDisplay = screenshotHotkeyDisplay
+        self.dictationKeyCode = dictationKeyCode
+        self.dictationModifiers = dictationModifiers
+        self.dictationDisplay = dictationDisplay
         self.transcriptionMode = transcriptionMode
         self.geminiApiKey = geminiApiKey
         self.customEndpointUrl = customEndpointUrl
@@ -56,6 +65,7 @@ struct Config: Codable {
         case chatId, hotkeyKeyCode, hotkeyModifiers, hotkeyDisplay
         case recordingMode, launchAtLogin, apiId, apiHash, userLoggedIn
         case screenshotHotkeyKeyCode, screenshotHotkeyModifiers, screenshotHotkeyDisplay
+        case dictationKeyCode, dictationModifiers, dictationDisplay
         case transcriptionMode, geminiApiKey
         case customEndpointUrl, customApiKey, customModelName
         case sendVoiceAsText
@@ -77,6 +87,9 @@ struct Config: Codable {
         screenshotHotkeyKeyCode = try c.decodeIfPresent(UInt16.self, forKey: .screenshotHotkeyKeyCode) ?? 0
         screenshotHotkeyModifiers = try c.decodeIfPresent(UInt.self, forKey: .screenshotHotkeyModifiers) ?? 0
         screenshotHotkeyDisplay = try c.decodeIfPresent(String.self, forKey: .screenshotHotkeyDisplay) ?? ""
+        dictationKeyCode = try c.decodeIfPresent(UInt16.self, forKey: .dictationKeyCode) ?? 0x0B
+        dictationModifiers = try c.decodeIfPresent(UInt.self, forKey: .dictationModifiers) ?? 786432
+        dictationDisplay = try c.decodeIfPresent(String.self, forKey: .dictationDisplay) ?? "⌃⌥B"
         transcriptionMode = try c.decodeIfPresent(String.self, forKey: .transcriptionMode) ?? "local"
         geminiApiKey = try c.decodeIfPresent(String.self, forKey: .geminiApiKey) ?? ""
         customEndpointUrl = try c.decodeIfPresent(String.self, forKey: .customEndpointUrl) ?? ""
@@ -99,6 +112,9 @@ struct Config: Codable {
         try c.encode(screenshotHotkeyKeyCode, forKey: .screenshotHotkeyKeyCode)
         try c.encode(screenshotHotkeyModifiers, forKey: .screenshotHotkeyModifiers)
         try c.encode(screenshotHotkeyDisplay, forKey: .screenshotHotkeyDisplay)
+        try c.encode(dictationKeyCode, forKey: .dictationKeyCode)
+        try c.encode(dictationModifiers, forKey: .dictationModifiers)
+        try c.encode(dictationDisplay, forKey: .dictationDisplay)
         try c.encode(transcriptionMode, forKey: .transcriptionMode)
         try c.encode(geminiApiKey, forKey: .geminiApiKey)
         try c.encode(customEndpointUrl, forKey: .customEndpointUrl)
@@ -126,7 +142,10 @@ struct Config: Codable {
         userLoggedIn: false,
         screenshotHotkeyKeyCode: 0x2E,    // M
         screenshotHotkeyModifiers: 786432, // ⌃⌥
-        screenshotHotkeyDisplay: "⌃⌥M"
+        screenshotHotkeyDisplay: "⌃⌥M",
+        dictationKeyCode: 0x0B,           // B
+        dictationModifiers: 786432,       // ⌃⌥
+        dictationDisplay: "⌃⌥B"
     )
 
     static func load() -> Config {
@@ -157,5 +176,9 @@ struct Config: Codable {
 
     var hasScreenshotHotkey: Bool {
         screenshotHotkeyKeyCode > 0 && !screenshotHotkeyDisplay.isEmpty
+    }
+
+    var hasDictationHotkey: Bool {
+        dictationKeyCode > 0 && !dictationDisplay.isEmpty
     }
 }

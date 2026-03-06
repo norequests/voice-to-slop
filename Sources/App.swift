@@ -2,6 +2,7 @@ import Cocoa
 import AVFoundation
 import Carbon.HIToolbox
 import ServiceManagement
+import UserNotifications
 
 func log(_ message: String) {
     let timestamp = ISO8601DateFormatter().string(from: Date())
@@ -41,6 +42,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var _screenshotModifiers: UInt = 0
     var screenshotPath: String?
     var isScreenshotMode = false
+    // Dictation hotkey
+    var _dictationKeyCode: CGKeyCode = 0
+    var _dictationModifiers: UInt = 0
+    var isDictationMode = false
+    var notificationPermissionRequested = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -300,6 +306,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self._screenshotModifiers = config.screenshotHotkeyModifiers
             log("📸 Screenshot hotkey: \(config.screenshotHotkeyDisplay)")
         }
+        if config.hasDictationHotkey {
+            self._dictationKeyCode = CGKeyCode(config.dictationKeyCode)
+            self._dictationModifiers = config.dictationModifiers
+            log("📝 Dictation hotkey: \(config.dictationDisplay)")
+        }
 
         let runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
         CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
@@ -335,6 +346,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 .intersection(.deviceIndependentFlagsMask).rawValue
         ))
         let screenshotMatch = _screenshotKeyCode > 0 && keyCode == _screenshotKeyCode && currentMods == screenshotTargetMods
+        let dictationTargetMods = CGEventFlags(rawValue: UInt64(
+            NSEvent.ModifierFlags(rawValue: _dictationModifiers)
+                .intersection(.deviceIndependentFlagsMask).rawValue
+        ))
+        let dictationMatch = _dictationKeyCode > 0 && keyCode == _dictationKeyCode && currentMods == dictationTargetMods
 
         // ── Screenshot combo (always hold-to-record) ──
         if type == .keyDown && screenshotMatch && !isRepeat && !isRecording {
@@ -351,6 +367,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 return nil
             }
             // Suppress any other keys during screenshot recording too
+            return nil
+        }
+
+        // ── Dictation hotkey (always hold-to-record) ──
+        if type == .keyDown && dictationMatch && !isRepeat && !isRecording {
+            DispatchQueue.main.async { self.startDictationRecording() }
+            return nil
+        }
+        if isRecording && isDictationMode {
+            if type == .keyDown && keyCode == _dictationKeyCode {
+                return nil
+            }
+            if type == .keyUp && keyCode == _dictationKeyCode {
+                DispatchQueue.main.async { self.stopAndDictate() }
+                return nil
+            }
             return nil
         }
 
@@ -487,6 +519,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    func startDictationRecording() {
+        guard !isRecording else {
+            log("⚠️ startDictationRecording skipped")
+            return
+        }
+        isDictationMode = true
+        startRecording()
+        if !isRecording {
+            isDictationMode = false
+        }
+    }
+
     // MARK: - Transcription helper
 
     /// Returns a closure that transcribes `audioPath` using the current config.
@@ -522,10 +566,61 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    /// Returns a closure that transcribes `audioPath`, copies transcript to clipboard, and notifies.
+    func makeDictationClosure(audioPath: String) -> (@escaping (Bool) -> Void) -> Void {
+        let transcribe = makeTranscribeClosure(audioPath: audioPath)
+        return { [weak self] completion in
+            transcribe { transcript in
+                guard let self = self else {
+                    completion(false)
+                    return
+                }
+                guard let text = transcript?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else {
+                    self.showLocalNotification(title: "Voice to Slop", subtitle: "Dictation failed", body: "No speech detected")
+                    completion(false)
+                    return
+                }
+
+                let pasteboard = NSPasteboard.general
+                pasteboard.clearContents()
+                let copied = pasteboard.setString(text, forType: .string)
+                if copied {
+                    self.showLocalNotification(
+                        title: "Voice to Slop",
+                        subtitle: "Copied to clipboard",
+                        body: String(text.prefix(50))
+                    )
+                    log("✅ Dictation copied to clipboard")
+                    completion(true)
+                } else {
+                    self.showLocalNotification(title: "Voice to Slop", subtitle: "Dictation failed", body: "Clipboard write failed")
+                    completion(false)
+                }
+            }
+        }
+    }
+
+    func requestNotificationPermissionIfNeeded() {
+        guard !notificationPermissionRequested else { return }
+        notificationPermissionRequested = true
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+    }
+
+    func showLocalNotification(title: String, subtitle: String, body: String) {
+        requestNotificationPermissionIfNeeded()
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.subtitle = subtitle
+        content.body = body
+        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request)
+    }
+
     func stopAndSendScreenshot() {
         guard isRecording, isScreenshotMode else { return }
         isRecording = false
         isScreenshotMode = false
+        isDictationMode = false
         updateIcon(recording: false)
 
         guard let rec = recorder else {
@@ -601,6 +696,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func stopAndSend() {
         guard isRecording else { return }
         isRecording = false
+        isDictationMode = false
         updateIcon(recording: false)
 
         guard let rec = recorder else {
@@ -684,6 +780,53 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                         try? FileManager.default.removeItem(at: oggURL)
                     }
                 }
+            }
+        }
+    }
+
+    func stopAndDictate() {
+        guard isRecording, isDictationMode else { return }
+        isRecording = false
+        isDictationMode = false
+        updateIcon(recording: false)
+
+        guard let rec = recorder else {
+            log("⬛ No recorder to stop (dictation)")
+            return
+        }
+
+        let duration = rec.currentTime
+        rec.stop()
+        recorder = nil
+
+        guard let url = tempURL else {
+            log("⬛ No temp URL (dictation)")
+            return
+        }
+
+        log("⬛ Dictation stopped — duration: \(String(format: "%.1f", duration))s")
+
+        do {
+            let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
+            let size = attrs[.size] as? Int ?? 0
+            log("📁 Dictation file size: \(size) bytes")
+
+            if duration < 0.5 || size < 1000 {
+                log("⏭ Dictation too short (\(String(format: "%.1f", duration))s, \(size)b), discarding")
+                try? FileManager.default.removeItem(at: url)
+                return
+            }
+        } catch {
+            log("❌ Can't read dictation file: \(error)")
+            showLocalNotification(title: "Voice to Slop", subtitle: "Dictation failed", body: "Could not read recorded audio")
+            try? FileManager.default.removeItem(at: url)
+            return
+        }
+
+        let dictate = makeDictationClosure(audioPath: url.path)
+        dictate { _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                try? FileManager.default.removeItem(at: url)
             }
         }
     }
